@@ -70,6 +70,12 @@
     padding: 16px 24px;
   }
   .reader-top .book-name { font-size: 17px; font-weight: bold; flex: 1; text-align: center; }
+  .voice-select {
+    border: none; background: var(--card); color: var(--ink);
+    border-radius: 999px; padding: 8px 12px; font-size: 14px;
+    cursor: pointer; box-shadow: var(--shadow); font-family: inherit;
+    max-width: 160px;
+  }
   .btn {
     border: none; background: var(--card); color: var(--ink);
     border-radius: 999px; padding: 8px 18px; font-size: 14px;
@@ -157,6 +163,7 @@
   <div class="reader-top">
     <button class="btn" id="btnBack">← 书架</button>
     <div class="book-name" id="bookName"></div>
+    <select class="voice-select" id="voiceSelect" title="选择讲述人"></select>
     <button class="btn primary" id="btnSpeak">🔊 讲给我听</button>
   </div>
   <div class="page-area">
@@ -304,12 +311,46 @@ function renderDots() {
 function goNext() { if (pageIndex < current.pages.length - 1) { pageIndex++; renderPage(); } }
 function goPrev() { if (pageIndex > 0) { pageIndex--; renderPage(); } }
 
-// ---------- 温柔朗读（浏览器 TTS） ----------
+// ---------- 温柔朗读：豆包 TTS 优先，浏览器本地语音降级 ----------
 let speaking = false;
+let ttsConfig = { enabled: false, voices: [] };
+let currentVoiceId = "tongtong";
+const audioEl = new Audio();
+
+async function loadTtsConfig() {
+  try {
+    const res = await fetch("/api/tts/config");
+    ttsConfig = await res.json();
+  } catch { ttsConfig = { enabled: false, voices: [] }; }
+  const sel = document.getElementById("voiceSelect");
+  sel.innerHTML = "";
+  if (ttsConfig.enabled && ttsConfig.voices.length) {
+    for (const v of ttsConfig.voices) {
+      const opt = document.createElement("option");
+      opt.value = v.id;
+      opt.textContent = v.label;
+      sel.appendChild(opt);
+    }
+    sel.style.display = "";
+    sel.value = currentVoiceId;
+  } else {
+    const opt = document.createElement("option");
+    opt.value = "local";
+    opt.textContent = "本地语音";
+    sel.appendChild(opt);
+    sel.style.display = "";
+  }
+}
+
+function pageNarration(p) {
+  return `第${p.no}页，${p.title}。${p.text || ""}`;
+}
 
 function stopSpeak() {
-  if (speechSynthesis) speechSynthesis.cancel();
   speaking = false;
+  audioEl.pause();
+  audioEl.removeAttribute("src");
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
   refreshSpeakBtn();
 }
 
@@ -319,42 +360,60 @@ function refreshSpeakBtn() {
   btn.classList.toggle("speaking", speaking);
 }
 
-async function speakCurrent() {
-  if (speaking) { stopSpeak(); return; }
-  const p = current.pages[pageIndex];
-  const intro = `第${p.no}页，${p.title}。`;
-  const text = `${intro} ${p.text || ""}`;
-  if (!("speechSynthesis" in window)) { alert("当前浏览器不支持语音朗读哦"); return; }
+// 讲完当前页：停顿片刻，自动翻页继续
+function onNarrationEnd() {
+  if (!current || !speaking) return;
+  if (pageIndex < current.pages.length - 1) {
+    pageIndex++;
+    renderPage();
+    setTimeout(() => speakCurrent(), 600);
+  } else {
+    speaking = false;
+    refreshSpeakBtn();
+  }
+}
 
-  // 温柔的讲述：zh-CN、慢语速、柔和音调，优先挑女声
+// 本地 Web Speech 降级路径（豆包未配置或合成失败时）
+function speakLocal(text) {
+  if (!("speechSynthesis" in window)) { alert("当前浏览器不支持语音朗读哦"); return; }
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "zh-CN";
   u.rate = 0.85;
   u.pitch = 1.15;
-  u.volume = 1;
   const voices = speechSynthesis.getVoices();
-  const pick = voices.find(v => /zh[-_]CN/i.test(v.lang) && /female|女|Yaoyao|Huihui|Xiaoxiao|Tingting/i.test(v.name))
+  const pick = voices.find(v => /zh[-_]CN/i.test(v.lang) && /Yaoyao|Huihui|Xiaoxiao|female|女/i.test(v.name))
     || voices.find(v => /zh[-_]CN/i.test(v.lang))
     || voices.find(v => /^zh/i.test(v.lang));
   if (pick) u.voice = pick;
-
-  // 读完这一页，温柔地问一句要不要继续，然后自动翻页继续讲
-  u.onend = () => {
-    if (!current || speaking === false) return;
-    if (pageIndex < current.pages.length - 1) {
-      pageIndex++;
-      renderPage();
-      setTimeout(() => speakCurrent(), 600);
-    } else {
-      speaking = false;
-      refreshSpeakBtn();
-    }
-  };
+  u.onend = onNarrationEnd;
   u.onerror = () => { speaking = false; refreshSpeakBtn(); };
+  speechSynthesis.speak(u);
+}
 
+async function speakCurrent() {
+  if (speaking) { stopSpeak(); return; }
+  const p = current.pages[pageIndex];
+  const text = pageNarration(p);
   speaking = true;
   refreshSpeakBtn();
-  speechSynthesis.speak(u);
+
+  if (!ttsConfig.enabled) { speakLocal(text); return; }
+
+  // 豆包 TTS：合成当前页 mp3 并播放
+  try {
+    const qs = new URLSearchParams({ text, voice: currentVoiceId });
+    const res = await fetch(`/api/tts?${qs}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    if (blob.size < 100) throw new Error("音频为空");
+    audioEl.src = URL.createObjectURL(blob);
+    audioEl.onended = onNarrationEnd;
+    audioEl.onerror = () => { speakLocal(text); };
+    await audioEl.play();
+  } catch {
+    // 服务端不可用 → 本地语音兜底
+    speakLocal(text);
+  }
 }
 
 // 预热 voices（Chrome 异步加载）
@@ -368,6 +427,10 @@ document.getElementById("btnBack").addEventListener("click", closeBook);
 document.getElementById("btnNext").addEventListener("click", goNext);
 document.getElementById("btnPrev").addEventListener("click", goPrev);
 document.getElementById("btnSpeak").addEventListener("click", speakCurrent);
+document.getElementById("voiceSelect").addEventListener("change", (e) => {
+  currentVoiceId = e.target.value;
+  stopSpeak();
+});
 document.addEventListener("keydown", (e) => {
   if (!current) return;
   if (e.key === "ArrowRight") goNext();
@@ -376,6 +439,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 loadBooks();
+loadTtsConfig();
 </script>
 </body>
 </html>

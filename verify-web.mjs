@@ -89,13 +89,20 @@ const backOk = await evaluate(`(() => {
 })()`);
 check("返回书架", backOk, "");
 
-// 6. TTS 支持检测（不实际发声，验证 API 存在与声音列表）
+// 6. TTS：配置端点 + 讲述人选择器渲染（无 Key 时降级为本地语音）
 const tts = await evaluate(`(() => {
-  const has = "speechSynthesis" in window;
-  const voices = has ? speechSynthesis.getVoices().filter(v => /^zh/i.test(v.lang)).map(v => v.name) : [];
-  return { has, zhVoices: voices.slice(0, 5) };
+  const sel = document.getElementById('voiceSelect');
+  return {
+    configEnabled: window.ttsConfig ? ttsConfig.enabled : null,
+    selVisible: sel.style.display !== 'none' && sel.options.length > 0,
+    selValue: sel.value,
+    optionCount: sel.options.length,
+    firstOption: sel.options[0] ? sel.options[0].textContent : '',
+    hasSpeech: "speechSynthesis" in window,
+  };
 })()`);
-check("浏览器 speechSynthesis 可用", tts.has, tts.zhVoices.length ? `中文声音: ${tts.zhVoices.join(", ")}` : "（声音列表可能异步加载）");
+check("TTS 配置端点可达且选择器渲染", tts.selVisible && (tts.configEnabled === true ? tts.optionCount >= 4 : tts.firstOption.includes("本地语音")), JSON.stringify(tts));
+check("浏览器本地语音可用（降级路径）", tts.hasSpeech, "");
 
 // 7. 截图留档
 const shot = await send("Page.captureScreenshot", { format: "png" });

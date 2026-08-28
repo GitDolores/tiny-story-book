@@ -65,8 +65,25 @@ node server.mjs
 
 - **卡片书架**：每本绘本一张暖色卡片，显示主题名与页数
 - **翻页阅读**：点击卡片进入，左右方向键 / 圆点 / 按钮翻页，每页展示画面描述与朗读文字
-- **温柔讲述**：点「🔊 讲给我听」，浏览器语音（优先中文女声、慢语速、柔音调）朗读当前页，读完自动翻页继续讲，直到整本书讲完
+- **温柔讲述**：点「🔊 讲给我听」朗读当前页，读完自动翻页继续讲，直到整本书讲完
+- **豆包音色**（可选）：配置火山引擎 TTS 后，讲述人变成豆包同款神经网络童声（彤彤/湾湾/萱萱/知性姐姐），阅读器顶部可切换讲述人；未配置时自动降级为浏览器本地语音
 - 新生成的绘本刷新页面即可看到（服务端动态扫描 `kids_book/`）
+
+### 配置豆包 TTS（推荐，音质远超浏览器本地语音）
+
+1. 注册[火山引擎](https://www.volcengine.com/)，控制台开通「语音技术 → 语音合成大模型」，创建应用并获取凭证
+2. 设置环境变量后重启服务：
+
+```bat
+set TTS_APP_ID=你的应用ID
+set TTS_ACCESS_KEY=你的AccessKey
+set TTS_SECRET_KEY=你的SecretKey
+node server.mjs
+```
+
+3. 打开 http://localhost:5177，阅读器顶部讲述人下拉框即可选择豆包音色
+
+> 未配置时页面显示「本地语音」，功能不受影响。
 
 网页 e2e 验证（可选，需先开 CDP Chrome）：
 
@@ -134,6 +151,7 @@ node main.mjs --batch topics.txt --add 睡眠的秘密
 | `LLM_API_KEY` | 自定义服务的 API Key | — |
 | `LLM_MODEL` | 模型名 | 按提供商推断 |
 | `LLM_PROVIDER` | `dashscope` / `openai` / `mock` | 自动探测 |
+| `TTS_APP_ID` / `TTS_ACCESS_KEY` / `TTS_SECRET_KEY` | 火山引擎豆包 TTS 凭证（小书架语音讲述） | 未配置则用浏览器本地语音 |
 
 **提供商自动探测顺序**：`--provider` 参数 > `LLM_PROVIDER` > `DASHSCOPE_API_KEY`（→ qwen-plus）> `OPENAI_API_KEY`（→ gpt-4o-mini）> `LLM_BASE_URL` + `LLM_API_KEY` > 都没有则降级为 mock 演示模式。
 
