@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小书架 · tiny-story-book</title>
+<style>
+  :root {
+    --bg: #fdf6ec;
+    --card: #ffffff;
+    --ink: #5b4a3f;
+    --ink-soft: #8a7a6d;
+    --accent: #f2a65a;
+    --accent-soft: #ffd9ae;
+    --shadow: 0 6px 24px rgba(91, 74, 63, 0.12);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    min-height: 100vh;
+  }
+
+  /* ---------- 书架 ---------- */
+  .shelf { max-width: 1100px; margin: 0 auto; padding: 48px 24px 64px; }
+  .shelf h1 { font-size: 28px; text-align: center; margin-bottom: 6px; }
+  .shelf .subtitle { text-align: center; color: var(--ink-soft); font-size: 14px; margin-bottom: 36px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 24px;
+  }
+  .book-card {
+    background: var(--card);
+    border-radius: 18px;
+    padding: 28px 24px;
+    box-shadow: var(--shadow);
+    cursor: pointer;
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+    position: relative;
+    overflow: hidden;
+    border: none;
+    text-align: left;
+    font-family: inherit;
+  }
+  .book-card:hover { transform: translateY(-6px); box-shadow: 0 12px 32px rgba(91, 74, 63, 0.18); }
+  .book-card .emoji { font-size: 40px; margin-bottom: 12px; }
+  .book-card .title { font-size: 19px; font-weight: bold; margin-bottom: 8px; color: var(--ink); }
+  .book-card .pages { font-size: 13px; color: var(--ink-soft); }
+  .book-card .sprite { font-size: 12px; color: var(--ink-soft); margin-top: 6px; min-height: 17px; }
+  .book-card .ribbon {
+    position: absolute; top: 16px; right: -34px;
+    background: var(--accent); color: #fff;
+    font-size: 12px; padding: 3px 40px; transform: rotate(38deg);
+  }
+  .empty-tip { text-align: center; color: var(--ink-soft); padding: 60px 0; font-size: 15px; }
+
+  /* ---------- 阅读器 ---------- */
+  .reader {
+    position: fixed; inset: 0; z-index: 10;
+    background: linear-gradient(180deg, #fff8ef 0%, #fdeed8 100%);
+    display: flex; flex-direction: column;
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .reader.hidden { display: none; }
+
+  .reader-top {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 24px;
+  }
+  .reader-top .book-name { font-size: 17px; font-weight: bold; flex: 1; text-align: center; }
+  .voice-select {
+    border: none; background: var(--card); color: var(--ink);
+    border-radius: 999px; padding: 8px 12px; font-size: 14px;
+    cursor: pointer; box-shadow: var(--shadow); font-family: inherit;
+    max-width: 160px;
+  }
+  .btn {
+    border: none; background: var(--card); color: var(--ink);
+    border-radius: 999px; padding: 8px 18px; font-size: 14px;
+    cursor: pointer; box-shadow: var(--shadow);
+    transition: background 0.2s ease, transform 0.15s ease;
+    font-family: inherit;
+  }
+  .btn:hover { background: var(--accent-soft); transform: scale(1.05); }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.speaking { background: #7ecba1; color: #fff; }
+
+  .page-area {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    padding: 8px 24px 16px; min-height: 0;
+  }
+  .page {
+    background: var(--card);
+    border-radius: 24px;
+    box-shadow: var(--shadow);
+    max-width: 760px; width: 100%;
+    max-height: 100%;
+    padding: 36px 44px;
+    display: flex; flex-direction: column; gap: 18px;
+    overflow-y: auto;
+    animation: pageIn 0.35s ease;
+  }
+  @keyframes pageIn {
+    from { opacity: 0; transform: translateX(26px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  .page .page-no { font-size: 13px; color: var(--ink-soft); text-align: center; }
+  .page h2 { font-size: 24px; text-align: center; }
+  .scene {
+    position: relative;
+    background: linear-gradient(160deg, #fff3e0, #ffe8cc);
+    border-radius: 16px;
+    padding: 18px 22px 20px;
+    border-left: 4px solid var(--accent);
+    overflow: hidden;
+  }
+  .scene .scene-label { font-size: 12px; opacity: 0.7; color: #7a675a; display: block; margin-bottom: 6px; }
+  .scene .scene-emojis { font-size: 26px; letter-spacing: 8px; margin-bottom: 8px; }
+  .scene .scene-text { font-size: 14px; line-height: 1.8; color: #7a675a; padding-right: 56px; }
+  .scene .watermark {
+    position: absolute; right: 8px; bottom: -6px;
+    font-size: 56px; opacity: 0.16; line-height: 1;
+  }
+  .dialogue { display: flex; flex-direction: column; gap: 14px; padding: 4px 2px; }
+  .bubble-row { display: flex; gap: 10px; align-items: flex-start; }
+  .bubble-row.right { flex-direction: row-reverse; }
+  .bubble-row.center { justify-content: center; }
+  .avatar {
+    width: 44px; height: 44px; border-radius: 50%;
+    background: #fff; box-shadow: var(--shadow);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px; flex: none;
+  }
+  .bubble {
+    max-width: 74%;
+    padding: 10px 16px 12px;
+    border-radius: 16px;
+    font-size: 19px; line-height: 1.7;
+    box-shadow: 0 2px 10px rgba(91, 74, 63, 0.08);
+    position: relative;
+  }
+  .bubble-row.left .bubble { background: #ffe9f0; border-top-left-radius: 4px; }
+  .bubble-row.right .bubble { background: #e3f4ec; border-top-right-radius: 4px; }
+  .bubble .speaker-name { font-size: 12px; color: #b09a89; margin-bottom: 3px; }
+  .bubble .emotion { font-size: 11px; color: #c4a998; position: absolute; top: 8px; right: 12px; }
+  .narration {
+    background: #f6efe4; color: #7a675a;
+    border-radius: 12px; padding: 10px 20px;
+    font-size: 17px; line-height: 1.8; text-align: center;
+    max-width: 96%;
+  }
+  .narration::before { content: "🌙 "; opacity: 0.7; }
+  .story {
+    font-size: 21px; line-height: 2; text-align: center;
+    padding: 10px 6px; letter-spacing: 0.5px;
+    white-space: pre-line;
+  }
+
+  .reader-bottom {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 28px 20px;
+  }
+  .nav-btn {
+    border: none; background: var(--card);
+    width: 52px; height: 52px; border-radius: 50%;
+    font-size: 22px; cursor: pointer; box-shadow: var(--shadow);
+    transition: transform 0.15s ease, background 0.2s ease;
+    color: var(--ink);
+  }
+  .nav-btn:hover:not(:disabled) { background: var(--accent-soft); transform: scale(1.1); }
+  .nav-btn:disabled { opacity: 0.3; cursor: default; }
+  .dots { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: 60%; }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #e4d5c3; cursor: pointer; transition: all 0.2s ease;
+  }
+  .dot.on { background: var(--accent); transform: scale(1.3); }
+
+  @media (max-width: 640px) {
+    .page { padding: 24px 22px; }
+    .story { font-size: 18px; }
+    .bubble { font-size: 17px; }
+    .scene .scene-text { padding-right: 0; }
+    .dots { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 书架 -->
+<div class="shelf" id="shelf">
+  <h1>📚 我的小书架</h1>
+  <div class="subtitle">挑一本喜欢的绘本，轻轻点开它吧 ✨</div>
+  <div class="grid" id="grid"></div>
+  <div class="empty-tip hidden" id="emptyTip">书架上还没有绘本呢～快去生成一本吧！</div>
+</div>
+
+<!-- 阅读器 -->
+<div class="reader hidden" id="reader">
+  <div class="reader-top">
+    <button class="btn" id="btnBack">← 书架</button>
+    <div class="book-name" id="bookName"></div>
+    <select class="voice-select" id="voiceSelect" title="选择讲述人"></select>
+    <button class="btn primary" id="btnSpeak">🔊 讲给我听</button>
+  </div>
+  <div class="page-area">
+    <div class="page" id="page">
+      <div class="page-no" id="pageNo"></div>
+      <h2 id="pageTitle"></h2>
+      <div class="scene">
+        <span class="scene-label">🖼️ 这一页的画面</span>
+        <div class="scene-emojis" id="sceneEmojis"></div>
+        <div class="scene-text" id="pagePic"></div>
+        <div class="watermark" id="sceneWatermark"></div>
+      </div>
+      <div class="dialogue" id="pageText"></div>
+    </div>
+  </div>
+  <div class="reader-bottom">
+    <button class="nav-btn" id="btnPrev" title="上一页">‹</button>
+    <div class="dots" id="dots"></div>
+    <button class="nav-btn" id="btnNext" title="下一页">›</button>
+  </div>
+</div>
+
+<script>
+// ---------- 数据 ----------
+let books = [];
+let current = null;   // 当前书 { name, title, pages: [{title, pic, text}] }
+let pageIndex = 0;
+
+// ---------- 解析绘本 markdown ----------
+// 与 lib/kidsbook.mjs parseBook 保持一致：文字既支持同一行，也支持 📖文字： 后的多行 `>` 对白
+function parseBook(md, name) {
+  const pages = [];
+  const lines = md.split(/\r?\n/);
+  let title = name;
+  let sprite = "";
+  let cur = null;
+  let inText = false;
+  for (const line of lines) {
+    const hm = line.match(/^#\s+(.+)$/);
+    if (hm && !cur && pages.length === 0) {
+      title = hm[1].trim();
+      continue;
+    }
+    const pm = line.match(/^##\s*第\s*(\d+)\s*页[：:]?\s*(.*)$/);
+    if (pm) {
+      if (cur) pages.push(cur);
+      cur = { no: parseInt(pm[1], 10), title: pm[2].trim() || `第 ${pm[1]} 页`, pic: "", text: "" };
+      inText = false;
+      continue;
+    }
+    if (!cur) {
+      const sm = line.match(/^>\s*适读年龄[^·]*·\s*拟人角色[：:]\s*(.+)$/);
+      if (sm) sprite = sm[1].trim();
+      continue;
+    }
+    const pic = line.match(/^>\s*🖼️?\s*画面[：:]\s*(.+)$/);
+    if (pic) { cur.pic = pic[1].trim(); inText = false; continue; }
+    const txt = line.match(/^>\s*📖?\s*文字[：:]\s*(.*)$/);
+    if (txt) { cur.text = txt[1].trim(); inText = true; continue; }
+    const cont = inText && line.match(/^>\s*(.+)$/);
+    if (cont) { cur.text = cur.text ? `${cur.text}\n${cont[1].trim()}` : cont[1].trim(); continue; }
+    inText = false;
+  }
+  if (cur) pages.push(cur);
+  return { name, title, sprite, pages };
+}
+
+// ---------- 书架渲染 ----------
+async function loadBooks() {
+  // 优先服务端 API；静态托管（GitHub Pages）下没有 /api/books，回退到构建产出的 books.json
+  let list = null;
+  for (const url of ["/api/books", "books.json"]) {
+    try {
+      const res = await fetch(url);
+      // 静态站的 404 兜底页可能是 text/html 200，content-type 用来排除它
+      if (!res.ok || !/json/i.test(res.headers.get("content-type") || "")) continue;
+      list = await res.json(); // [{name, title, icon, sprite, pages, audio?}]
+      break;
+    } catch {}
+  }
+  books = Array.isArray(list) ? list : [];
+  renderShelf();
+}
+
+function renderShelf() {
+  const grid = document.getElementById("grid");
+  const emptyTip = document.getElementById("emptyTip");
+  grid.innerHTML = "";
+  emptyTip.classList.toggle("hidden", books.length > 0);
+  books.forEach((b, i) => {
+    const card = document.createElement("button");
+    card.className = "book-card";
+    card.innerHTML = `
+      <div class="ribbon">${b.pages.length} 页</div>
+      <div class="emoji">${b.icon || "📖"}</div>
+      <div class="title"></div>
+      <div class="pages">${b.audio ? "🎧 有声 · 点开自动讲" : "点开读一读 📖"}</div>
+      <div class="sprite">${b.sprite ? `🧚 拟人角色 · ${b.sprite}` : ""}</div>`;
+    // 卡片用主题名（唯一），阅读器顶部再展示绘本标题
+    card.querySelector(".title").textContent = b.name;
+    card.addEventListener("click", () => openBook(b));
+    grid.appendChild(card);
+  });
+}
+
+// ---------- 阅读器 ----------
+// 对白行：说话人（情绪）：台词
+const DIALOGUE_RE = /^([^（）：\n]{1,4})（([^（）]*)）：\s*(.*)$/;
+const SPEAKERS = {
+  "小女孩": { avatar: "👧", side: "left" },
+  "妈妈": { avatar: "👩", side: "right" },
+};
+
+// 画面描述 → 场景 emoji（装饰性，帮助小朋友一眼看懂这一页的场景）
+const PIC_EMOJIS = [
+  [/雨|水滴|水花|池塘/, "💧"], [/云/, "☁️"], [/太阳|阳光/, "☀️"], [/月亮|夜|星星|星空/, "🌙"],
+  [/风/, "🍃"], [/彩虹/, "🌈"], [/花/, "🌸"], [/树|叶子/, "🌳"], [/种子|绿芽|发芽/, "🌱"],
+  [/牙|刷/, "🦷"], [/糖/, "🍬"], [/饭|餐桌|吃/, "🍚"], [/精灵|婆婆/, "🧚"], [/睡|被窝|梦/, "😴"],
+  [/灯/, "💡"], [/镜子/, "🪞"], [/窗/, "🪟"], [/被子|枕头/, "🛏️"],
+];
+
+function sceneEmojis(pic) {
+  const found = [];
+  for (const [re, emoji] of PIC_EMOJIS) {
+    if (found.length >= 4) break;
+    if (re.test(pic) && !found.includes(emoji)) found.push(emoji);
+  }
+  return found.join("");
+}
+
+function renderScene(p) {
+  const pic = p.pic || "（这一页还没有画面描述呢）";
+  document.getElementById("sceneEmojis").textContent = sceneEmojis(pic);
+  document.getElementById("pagePic").textContent = pic;
+  document.getElementById("sceneWatermark").textContent = current?.icon || "📖";
+}
+
+function renderDialogue(p) {
+  const box = document.getElementById("pageText");
+  box.innerHTML = "";
+  const lines = (p.text || "").split(/\n/).map((s) => s.trim()).filter(Boolean);
+  let hasBubble = false;
+  for (const line of lines) {
+    const m = line.match(DIALOGUE_RE);
+    if (m) {
+      const [, speaker, emotion, content] = m;
+      const meta = SPEAKERS[speaker];
+      if (!meta) {
+        // 旁白等无头像说话人：渲染成居中旁白条
+        const narr = document.createElement("div");
+        narr.className = "narration";
+        narr.textContent = content;
+        box.appendChild(narr);
+        hasBubble = true;
+        continue;
+      }
+      hasBubble = true;
+      const row = document.createElement("div");
+      row.className = `bubble-row ${meta.side}`;
+      const av = document.createElement("div");
+      av.className = "avatar";
+      av.textContent = meta.avatar;
+      row.appendChild(av);
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      const name = document.createElement("div");
+      name.className = "speaker-name";
+      name.textContent = speaker;
+      bubble.appendChild(name);
+      bubble.appendChild(document.createTextNode(content));
+      if (emotion) {
+        const em = document.createElement("span");
+        em.className = "emotion";
+        em.textContent = emotion;
+        bubble.appendChild(em);
+      }
+      row.appendChild(bubble);
+      box.appendChild(row);
+    } else {
+      const narr = document.createElement("div");
+      narr.className = "narration";
+      narr.textContent = line;
+      box.appendChild(narr);
+    }
+  }
+  if (!hasBubble) box.classList.add("story"); else box.classList.remove("story");
+}
+
+let autoTimer = null; // 无音频驱动时的每 5 秒自动翻页
+
+function stopAuto() {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+}
+
+function startAuto() {
+  stopAuto();
+  autoTimer = setInterval(() => {
+    if (!current) return stopAuto();
+    if (speaking) return; // 音频/朗读正在驱动翻页，计时器让位
+    if (pageIndex < current.pages.length - 1) { pageIndex++; renderPage(); }
+    else stopAuto();
+  }, 5000);
+}
+
+function openBook(book) {
+  current = book;
+  pageIndex = 0;
+  prepareBookAudio(book);
+  document.getElementById("bookName").textContent = current.title;
+  document.getElementById("shelf").style.display = "none";
+  document.getElementById("reader").classList.remove("hidden");
+  syncVoiceSelect();
+  renderDots();
+  renderPage();
+  // 点开即自动讲述：整本录音/逐页朗读失败时，退化为每 5 秒自动翻页
+  startAuto();
+  speakCurrent();
+}
+
+function closeBook() {
+  stopAuto();
+  stopSpeak();
+  current = null;
+  document.getElementById("reader").classList.add("hidden");
+  document.getElementById("shelf").style.display = "";
+}
+
+function renderPage(opts = {}) {
+  const p = current.pages[pageIndex];
+  document.getElementById("pageNo").textContent = `第 ${p.no} 页 · 共 ${current.pages.length} 页`;
+  document.getElementById("pageTitle").textContent = p.title;
+  renderScene(p);
+  renderDialogue(p);
+  document.getElementById("btnPrev").disabled = pageIndex === 0;
+  document.getElementById("btnNext").disabled = pageIndex === current.pages.length - 1;
+  document.querySelectorAll(".dot").forEach((d, i) => d.classList.toggle("on", i === pageIndex));
+  // 翻页动画重触发
+  const page = document.getElementById("page");
+  page.style.animation = "none";
+  void page.offsetWidth;
+  page.style.animation = "";
+  if (opts.keepAudio) {
+    // 整本录音播放中翻页：不打断播放，手动翻页时把进度挪到这一页的时间点
+    if (opts.seek && bookAudio.readyState >= 1 && pageWindows[pageIndex]) {
+      bookAudio.currentTime = pageWindows[pageIndex].start;
+    }
+  } else {
+    stopSpeak();
+  }
+}
+
+function renderDots() {
+  const dots = document.getElementById("dots");
+  dots.innerHTML = "";
+  current.pages.forEach((_, i) => {
+    const d = document.createElement("div");
+    d.className = "dot";
+    d.title = `第 ${i + 1} 页`;
+    d.addEventListener("click", () => { pageIndex = i; renderPage({ keepAudio: isBookAudioPlaying(), seek: true }); if (autoTimer) startAuto(); });
+    dots.appendChild(d);
+  });
+}
+
+function goNext() {
+  if (pageIndex < current.pages.length - 1) {
+    pageIndex++;
+    renderPage({ keepAudio: isBookAudioPlaying(), seek: true });
+    if (autoTimer) startAuto(); // 手动翻页后从当前页重新计 5 秒
+  }
+}
+function goPrev() {
+  if (pageIndex > 0) {
+    pageIndex--;
+    renderPage({ keepAudio: isBookAudioPlaying(), seek: true });
+    if (autoTimer) startAuto();
+  }
+}
+
+// ---------- 温柔朗读：整本 mp3（mp3s/<书名>.mp3）→ 豆包 TTS → 浏览器本地语音 ----------
+let speaking = false;
+let ttsConfig = { enabled: false, voices: [] };
+let currentVoiceId = "tongtong";
+const audioEl = new Audio();     // 逐页即时合成（豆包 TTS）
+const bookAudio = new Audio();   // mp3s/ 下的整本有声书
+let pageWindows = [];            // 整本录音中每页对应的时间区间（按文字长度比例估算）
+
+// 打开一本书时切换音源：有同名 mp3 就用整本录音
+function prepareBookAudio(book) {
+  pageWindows = [];
+  bookAudio.pause();
+  bookAudio.removeAttribute("src");
+  if (book.audio) {
+    bookAudio.preload = "metadata";
+    bookAudio.src = book.audio;
+  }
+}
+
+// 把整段录音按每页时长切成时间区间，用于「边听边翻页」
+function ensurePageWindows() {
+  if (pageWindows.length || !current) return;
+  const duration = bookAudio.duration;
+  if (!duration || !isFinite(duration) || duration <= 0) return;
+  if (current.audioPages && current.audioPages.length === current.pages.length) {
+    // tts.mjs 生成的每页精确时长（mp3s/<书名>.json）
+    let acc = 0;
+    pageWindows = current.audioPages.map((s) => {
+      const start = acc;
+      acc += s;
+      return { start, end: Math.min(acc, duration) };
+    });
+    return;
+  }
+  // 无时长清单（外部放入的录音）：按各页字数占比估算
+  const weights = current.pages.map((p) => Math.max(1, `${p.title || ""}${p.text || ""}`.replace(/\s/g, "").length));
+  const total = weights.reduce((a, b) => a + b, 0);
+  let acc = 0;
+  pageWindows = weights.map((w) => {
+    const start = acc;
+    acc += (w / total) * duration;
+    return { start, end: acc };
+  });
+}
+
+function isBookAudioPlaying() {
+  return Boolean(current && current.audio && !current.audioFailed && !bookAudio.paused && !bookAudio.ended);
+}
+
+// 整本录音放不出来（文件缺失/解码失败）→ 退回逐页合成朗读
+function failBookAudio() {
+  if (!current || !current.audio || current.audioFailed || !bookAudio.getAttribute("src")) return;
+  current.audioFailed = true;
+  pageWindows = [];
+  const wasSpeaking = speaking;
+  speaking = false;
+  syncVoiceSelect();
+  if (wasSpeaking) speakPage(current.pages[pageIndex]);
+  else refreshSpeakBtn();
+}
+
+function syncVoiceSelect() {
+  const sel = document.getElementById("voiceSelect");
+  const useMp3 = Boolean(current && current.audio && !current.audioFailed);
+  sel.disabled = useMp3;
+  sel.title = useMp3 ? "这本书用 mp3s/ 里的整本录音讲述，无需选择讲述人" : "选择讲述人";
+}
+
+bookAudio.addEventListener("timeupdate", () => {
+  if (!speaking || !current || !current.audio || current.audioFailed) return;
+  ensurePageWindows();
+  if (!pageWindows.length) return;
+  let idx = pageWindows.findIndex((w) => bookAudio.currentTime < w.end);
+  if (idx === -1) idx = current.pages.length - 1;
+  if (idx !== pageIndex) { pageIndex = idx; renderPage({ keepAudio: true }); }
+});
+bookAudio.addEventListener("ended", () => { speaking = false; refreshSpeakBtn(); });
+bookAudio.addEventListener("error", failBookAudio);
+
+async function loadTtsConfig() {
+  try {
+    const res = await fetch("/api/tts/config");
+    ttsConfig = await res.json();
+  } catch { ttsConfig = { enabled: false, voices: [] }; }
+  const sel = document.getElementById("voiceSelect");
+  sel.innerHTML = "";
+  if (ttsConfig.enabled && ttsConfig.voices.length) {
+    for (const v of ttsConfig.voices) {
+      const opt = document.createElement("option");
+      opt.value = v.id;
+      opt.textContent = v.label;
+      sel.appendChild(opt);
+    }
+    sel.style.display = "";
+    sel.value = currentVoiceId;
+  } else {
+    const opt = document.createElement("option");
+    opt.value = "local";
+    opt.textContent = "本地语音";
+    sel.appendChild(opt);
+    sel.style.display = "";
+  }
+  syncVoiceSelect();
+}
+
+function pageNarration(p) {
+  // 对话体：只念台词（说话人/情绪由语气自然带出）；非对话体保持「页码+标题+正文」
+  const lines = (p.text || "").split(/\n/).map((s) => s.trim()).filter(Boolean);
+  const parts = lines.map((l) => (l.match(DIALOGUE_RE) || [])[3] || l).filter(Boolean);
+  if (parts.length) return parts.map((s) => (/[。！？…～]$/.test(s) ? s : `${s}。`)).join("");
+  return `第${p.no}页，${p.title}。`;
+}
+
+function stopSpeak() {
+  speaking = false;
+  audioEl.pause();
+  audioEl.removeAttribute("src");
+  bookAudio.pause();
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  stopAuto(); // 停止讲述 = 停下来慢慢看，自动翻页一并停下
+  refreshSpeakBtn();
+}
+
+function refreshSpeakBtn() {
+  const btn = document.getElementById("btnSpeak");
+  const useMp3 = Boolean(current && current.audio && !current.audioFailed);
+  btn.textContent = speaking ? "⏸ 停止朗读" : (useMp3 ? "🔊 听整本" : "🔊 讲给我听");
+  btn.classList.toggle("speaking", speaking);
+}
+
+// 讲完当前页：停顿片刻，自动翻页继续
+function onNarrationEnd() {
+  if (!current || !speaking) return;
+  if (pageIndex < current.pages.length - 1) {
+    pageIndex++;
+    renderPage();
+    setTimeout(() => speakCurrent(), 600);
+  } else {
+    speaking = false;
+    refreshSpeakBtn();
+  }
+}
+
+// 本地 Web Speech 降级路径（豆包未配置或合成失败时）
+function speakLocal(text) {
+  if (!("speechSynthesis" in window)) { alert("当前浏览器不支持语音朗读哦"); return; }
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "zh-CN";
+  u.rate = 0.85;
+  u.pitch = 1.15;
+  const voices = speechSynthesis.getVoices();
+  const pick = voices.find(v => /zh[-_]CN/i.test(v.lang) && /Yaoyao|Huihui|Xiaoxiao|female|女/i.test(v.name))
+    || voices.find(v => /zh[-_]CN/i.test(v.lang))
+    || voices.find(v => /^zh/i.test(v.lang));
+  if (pick) u.voice = pick;
+  u.onend = onNarrationEnd;
+  u.onerror = () => { speaking = false; refreshSpeakBtn(); };
+  speechSynthesis.speak(u);
+}
+
+// 逐页朗读：无同名 mp3 的绘本，或整本录音不可用时
+function speakPage(p) {
+  const text = pageNarration(p);
+  speaking = true;
+  refreshSpeakBtn();
+
+  if (!ttsConfig.enabled) { speakLocal(text); return; }
+
+  // 豆包 TTS：合成当前页 mp3 并播放
+  (async () => {
+    try {
+      const qs = new URLSearchParams({ text, voice: currentVoiceId });
+      const res = await fetch(`/api/tts?${qs}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      if (blob.size < 100) throw new Error("音频为空");
+      audioEl.src = URL.createObjectURL(blob);
+      audioEl.onended = onNarrationEnd;
+      audioEl.onerror = () => { speakLocal(text); };
+      await audioEl.play();
+    } catch {
+      // 服务端不可用 → 本地语音兜底
+      speakLocal(text);
+    }
+  })();
+}
+
+async function speakCurrent() {
+  if (speaking) { stopSpeak(); return; }
+  if (current.audio && !current.audioFailed) {
+    // 有整本录音：从当前页对应的时间点播起，跟着录音自动翻页
+    speaking = true;
+    refreshSpeakBtn();
+    if (bookAudio.readyState >= 1 && pageWindows[pageIndex]) bookAudio.currentTime = pageWindows[pageIndex].start;
+    bookAudio.play().catch((err) => {
+      if (err && err.name === "NotAllowedError") {
+        // 浏览器自动播放策略拦下（如后台标签页打开）：录音本身没坏，
+        // 保持静默的每 5 秒自动翻页，按钮回到「听整本」供手动起播
+        speaking = false;
+        refreshSpeakBtn();
+        return;
+      }
+      failBookAudio();
+    });
+    return;
+  }
+  speakPage(current.pages[pageIndex]);
+}
+
+// 预热 voices（Chrome 异步加载）
+if ("speechSynthesis" in window) {
+  speechSynthesis.onvoiceschanged = () => {};
+  speechSynthesis.getVoices();
+}
+
+// ---------- 事件绑定 ----------
+document.getElementById("btnBack").addEventListener("click", closeBook);
+document.getElementById("btnNext").addEventListener("click", goNext);
+document.getElementById("btnPrev").addEventListener("click", goPrev);
+document.getElementById("btnSpeak").addEventListener("click", speakCurrent);
+document.getElementById("voiceSelect").addEventListener("change", (e) => {
+  currentVoiceId = e.target.value;
+  stopSpeak();
+});
+document.addEventListener("keydown", (e) => {
+  if (!current) return;
+  if (e.key === "ArrowRight") goNext();
+  else if (e.key === "ArrowLeft") goPrev();
+  else if (e.key === "Escape") closeBook();
+});
+
+loadBooks();
+loadTtsConfig();
+</script>
+</body>
+</html>
