@@ -18,6 +18,11 @@ const API_BASE = process.env.STEP_TTS_BASE_URL || "https://api.stepfun.com";
 const API_PATH = "/v1/audio/speech";
 const MAX_INPUT_CHARS = 1000; // API 单次请求输入上限
 
+// 阶跃星辰阶梯限速：免费档 RPM=10，请求间主动留间隔；429 时按 RPM 窗口长退避
+const RPM_LIMIT = Math.max(1, parseInt(process.env.STEP_TTS_RPM || "10", 10));
+const MIN_REQUEST_GAP_MS = Math.ceil(60000 / RPM_LIMIT) + 200;
+let lastCallAt = 0;
+
 // instruction（全局语气指导）仅这两个模型支持，其余模型传入可能报错
 const INSTRUCTION_MODELS = new Set(["stepaudio-3-tts", "stepaudio-2.5-tts"]);
 
@@ -132,6 +137,7 @@ const HELP = `tiny-story-book 有声书生成器（StepAudio TTS）
 环境变量：
   STEP_API_KEY              阶跃星辰 API Key（必填，https://platform.stepfun.com 获取）
   STEP_TTS_MODEL / STEP_TTS_VOICE / STEP_TTS_INSTRUCTION   设默认模型/音色/语气指导
+  STEP_TTS_RPM              API 每分钟请求上限（默认 10，免费档；脚本自动按此限速避让 429）
 
 计费：stepaudio-3-tts 约 2.5 元 / 万字符（以阶跃星辰定价页为准）。
 `;
@@ -202,6 +208,13 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// 请求间隔节流：保证不超过 RPM 阈值（免费档 10/分钟，连续合成整本绘本必需）
+async function throttle() {
+  const wait = lastCallAt + MIN_REQUEST_GAP_MS - Date.now();
+  if (wait > 0) await sleep(wait);
+  lastCallAt = Date.now();
+}
+
 async function stepTts(text, opts, { maxRetries = 3 } = {}) {
   const body = {
     model: opts.model,
@@ -215,6 +228,7 @@ async function stepTts(text, opts, { maxRetries = 3 } = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      await throttle();
       const res = await fetch(`${API_BASE}${API_PATH}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${opts.apiKey}` },
@@ -237,8 +251,10 @@ async function stepTts(text, opts, { maxRetries = 3 } = {}) {
     } catch (err) {
       lastErr = err;
       if (err.noRetry || attempt === maxRetries) break;
-      const delay = 2000 * 2 ** (attempt - 1); // 2s, 4s
-      console.warn(`    ↻ 合成失败（第 ${attempt}/${maxRetries} 次）：${err.message}，${delay / 1000}s 后重试`);
+      // 429 = RPM 窗口未过，短退避无意义，按整分钟等
+      const isRateLimit = /HTTP 429/.test(err.message);
+      const delay = isRateLimit ? 65000 : 2000 * 2 ** (attempt - 1);
+      console.warn(`    ↻ 合成失败（第 ${attempt}/${maxRetries} 次）：${err.message.slice(0, 120)}，${Math.round(delay / 1000)}s 后重试`);
       await sleep(delay);
     }
   }
