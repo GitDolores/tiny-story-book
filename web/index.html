@@ -119,6 +119,7 @@
   .story {
     font-size: 21px; line-height: 2; text-align: center;
     padding: 10px 6px; letter-spacing: 0.5px;
+    white-space: pre-line;
   }
 
   .reader-bottom {
@@ -188,42 +189,36 @@ let current = null;   // 当前书 { name, title, pages: [{title, pic, text}] }
 let pageIndex = 0;
 
 // ---------- 解析绘本 markdown ----------
+// 与 server.mjs parseBook 保持一致：文字既支持同一行，也支持 📖文字： 后的多行 `>` 对白
 function parseBook(md, name) {
   const pages = [];
-  const pageRe = /^##\s*第\s*(\d+)\s*页[：:]?(.*)$/gm;
-  const marks = [];
-  let m;
-  while ((m = pageRe.exec(md)) !== null) {
-    marks.push({ no: parseInt(m[1], 10), title: m[2].trim(), start: m.index + m[0].length });
-  }
-  for (let i = 0; i < marks.length; i++) {
-    const body = md.slice(marks[i].start, i + 1 < marks.length ? pageRe.lastIndex - marks[i + 1].no.toString().length - marks[i].title.length : md.length).slice(0, i + 1 < marks.length ? undefined : undefined);
-    pages.push(null); // 占位，下面统一填
-  }
-  // 更简单可靠的切法：按行扫描
-  pages.length = 0;
   const lines = md.split(/\r?\n/);
+  let title = name;
   let cur = null;
+  let inText = false;
   for (const line of lines) {
+    const hm = line.match(/^#\s+(.+)$/);
+    if (hm && !cur && pages.length === 0) {
+      title = hm[1].trim();
+      continue;
+    }
     const pm = line.match(/^##\s*第\s*(\d+)\s*页[：:]?\s*(.*)$/);
     if (pm) {
       if (cur) pages.push(cur);
       cur = { no: parseInt(pm[1], 10), title: pm[2].trim() || `第 ${pm[1]} 页`, pic: "", text: "" };
+      inText = false;
       continue;
     }
-    if (!cur) {
-      const hm = line.match(/^#\s+(.+)$/);
-      if (hm && !pages.title) pages.title = hm[1].trim();
-      continue;
-    }
+    if (!cur) continue;
     const pic = line.match(/^>\s*🖼️?\s*画面[：:]\s*(.+)$/);
-    if (pic) { cur.pic = pic[1].trim(); continue; }
-    const txt = line.match(/^>\s*📖?\s*文字[：:]\s*(.+)$/);
-    if (txt) { cur.text = txt[1].trim(); continue; }
+    if (pic) { cur.pic = pic[1].trim(); inText = false; continue; }
+    const txt = line.match(/^>\s*📖?\s*文字[：:]\s*(.*)$/);
+    if (txt) { cur.text = txt[1].trim(); inText = true; continue; }
+    const cont = inText && line.match(/^>\s*(.+)$/);
+    if (cont) { cur.text = cur.text ? `${cur.text}\n${cont[1].trim()}` : cont[1].trim(); continue; }
+    inText = false;
   }
   if (cur) pages.push(cur);
-  const title = pages.title || name;
-  delete pages.title;
   return { name, title, pages };
 }
 
@@ -253,7 +248,7 @@ function renderShelf() {
       <div class="ribbon">${b.pages.length} 页</div>
       <div class="emoji">${EMOJIS[i % EMOJIS.length]}</div>
       <div class="title"></div>
-      <div class="pages">点开读一读 📖</div>`;
+      <div class="pages">${b.audio ? "🎧 有声 · 点开听一听" : "点开读一读 📖"}</div>`;
     // 卡片用主题名（唯一），阅读器顶部再展示绘本标题
     card.querySelector(".title").textContent = b.name;
     card.addEventListener("click", () => openBook(b));
@@ -265,9 +260,11 @@ function renderShelf() {
 function openBook(book) {
   current = book;
   pageIndex = 0;
+  prepareBookAudio(book);
   document.getElementById("bookName").textContent = current.title;
   document.getElementById("shelf").style.display = "none";
   document.getElementById("reader").classList.remove("hidden");
+  syncVoiceSelect();
   renderDots();
   renderPage();
 }
@@ -279,7 +276,7 @@ function closeBook() {
   document.getElementById("shelf").style.display = "";
 }
 
-function renderPage() {
+function renderPage(opts = {}) {
   const p = current.pages[pageIndex];
   document.getElementById("pageNo").textContent = `第 ${p.no} 页 · 共 ${current.pages.length} 页`;
   document.getElementById("pageTitle").textContent = p.title;
@@ -293,7 +290,14 @@ function renderPage() {
   page.style.animation = "none";
   void page.offsetWidth;
   page.style.animation = "";
-  stopSpeak();
+  if (opts.keepAudio) {
+    // 整本录音播放中翻页：不打断播放，手动翻页时把进度挪到这一页的时间点
+    if (opts.seek && bookAudio.readyState >= 1 && pageWindows[pageIndex]) {
+      bookAudio.currentTime = pageWindows[pageIndex].start;
+    }
+  } else {
+    stopSpeak();
+  }
 }
 
 function renderDots() {
@@ -303,19 +307,81 @@ function renderDots() {
     const d = document.createElement("div");
     d.className = "dot";
     d.title = `第 ${i + 1} 页`;
-    d.addEventListener("click", () => { pageIndex = i; renderPage(); });
+    d.addEventListener("click", () => { pageIndex = i; renderPage({ keepAudio: isBookAudioPlaying(), seek: true }); });
     dots.appendChild(d);
   });
 }
 
-function goNext() { if (pageIndex < current.pages.length - 1) { pageIndex++; renderPage(); } }
-function goPrev() { if (pageIndex > 0) { pageIndex--; renderPage(); } }
+function goNext() { if (pageIndex < current.pages.length - 1) { pageIndex++; renderPage({ keepAudio: isBookAudioPlaying(), seek: true }); } }
+function goPrev() { if (pageIndex > 0) { pageIndex--; renderPage({ keepAudio: isBookAudioPlaying(), seek: true }); } }
 
-// ---------- 温柔朗读：豆包 TTS 优先，浏览器本地语音降级 ----------
+// ---------- 温柔朗读：整本 mp3（mp3s/<书名>.mp3）→ 豆包 TTS → 浏览器本地语音 ----------
 let speaking = false;
 let ttsConfig = { enabled: false, voices: [] };
 let currentVoiceId = "tongtong";
-const audioEl = new Audio();
+const audioEl = new Audio();     // 逐页即时合成（豆包 TTS）
+const bookAudio = new Audio();   // mp3s/ 下的整本有声书
+let pageWindows = [];            // 整本录音中每页对应的时间区间（按文字长度比例估算）
+
+// 打开一本书时切换音源：有同名 mp3 就用整本录音
+function prepareBookAudio(book) {
+  pageWindows = [];
+  bookAudio.pause();
+  bookAudio.removeAttribute("src");
+  if (book.audio) {
+    bookAudio.preload = "metadata";
+    bookAudio.src = book.audio;
+  }
+}
+
+// 把整段录音按各页字数占比切成时间区间，用于「边听边翻页」
+function ensurePageWindows() {
+  if (pageWindows.length || !current) return;
+  const duration = bookAudio.duration;
+  if (!duration || !isFinite(duration) || duration <= 0) return;
+  const weights = current.pages.map((p) => Math.max(1, `${p.title || ""}${p.text || ""}`.replace(/\s/g, "").length));
+  const total = weights.reduce((a, b) => a + b, 0);
+  let acc = 0;
+  pageWindows = weights.map((w) => {
+    const start = acc;
+    acc += (w / total) * duration;
+    return { start, end: acc };
+  });
+}
+
+function isBookAudioPlaying() {
+  return Boolean(current && current.audio && !current.audioFailed && !bookAudio.paused && !bookAudio.ended);
+}
+
+// 整本录音放不出来（文件缺失/解码失败）→ 退回逐页合成朗读
+function failBookAudio() {
+  if (!current || !current.audio || current.audioFailed || !bookAudio.getAttribute("src")) return;
+  current.audioFailed = true;
+  pageWindows = [];
+  const wasSpeaking = speaking;
+  speaking = false;
+  syncVoiceSelect();
+  if (wasSpeaking) speakPage(current.pages[pageIndex]);
+  else refreshSpeakBtn();
+}
+
+function syncVoiceSelect() {
+  const sel = document.getElementById("voiceSelect");
+  const useMp3 = Boolean(current && current.audio && !current.audioFailed);
+  sel.disabled = useMp3;
+  sel.title = useMp3 ? "这本书用 mp3s/ 里的整本录音讲述，无需选择讲述人" : "选择讲述人";
+}
+
+bookAudio.addEventListener("timeupdate", () => {
+  if (!speaking || !current || !current.audio || current.audioFailed) return;
+  ensurePageWindows();
+  if (!pageWindows.length) return;
+  let idx = pageWindows.findIndex((w) => bookAudio.currentTime < w.end);
+  if (idx === -1) idx = current.pages.length - 1;
+  if (idx !== pageIndex) { pageIndex = idx; renderPage({ keepAudio: true }); }
+});
+bookAudio.addEventListener("ended", () => { speaking = false; refreshSpeakBtn(); });
+bookAudio.addEventListener("error", failBookAudio);
 
 async function loadTtsConfig() {
   try {
@@ -340,6 +406,7 @@ async function loadTtsConfig() {
     sel.appendChild(opt);
     sel.style.display = "";
   }
+  syncVoiceSelect();
 }
 
 function pageNarration(p) {
@@ -350,13 +417,15 @@ function stopSpeak() {
   speaking = false;
   audioEl.pause();
   audioEl.removeAttribute("src");
+  bookAudio.pause();
   if ("speechSynthesis" in window) speechSynthesis.cancel();
   refreshSpeakBtn();
 }
 
 function refreshSpeakBtn() {
   const btn = document.getElementById("btnSpeak");
-  btn.textContent = speaking ? "⏸ 停止朗读" : "🔊 讲给我听";
+  const useMp3 = Boolean(current && current.audio && !current.audioFailed);
+  btn.textContent = speaking ? "⏸ 停止朗读" : (useMp3 ? "🔊 听整本" : "🔊 讲给我听");
   btn.classList.toggle("speaking", speaking);
 }
 
@@ -390,9 +459,8 @@ function speakLocal(text) {
   speechSynthesis.speak(u);
 }
 
-async function speakCurrent() {
-  if (speaking) { stopSpeak(); return; }
-  const p = current.pages[pageIndex];
+// 逐页朗读：无同名 mp3 的绘本，或整本录音不可用时
+function speakPage(p) {
   const text = pageNarration(p);
   speaking = true;
   refreshSpeakBtn();
@@ -400,20 +468,35 @@ async function speakCurrent() {
   if (!ttsConfig.enabled) { speakLocal(text); return; }
 
   // 豆包 TTS：合成当前页 mp3 并播放
-  try {
-    const qs = new URLSearchParams({ text, voice: currentVoiceId });
-    const res = await fetch(`/api/tts?${qs}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const blob = await res.blob();
-    if (blob.size < 100) throw new Error("音频为空");
-    audioEl.src = URL.createObjectURL(blob);
-    audioEl.onended = onNarrationEnd;
-    audioEl.onerror = () => { speakLocal(text); };
-    await audioEl.play();
-  } catch {
-    // 服务端不可用 → 本地语音兜底
-    speakLocal(text);
+  (async () => {
+    try {
+      const qs = new URLSearchParams({ text, voice: currentVoiceId });
+      const res = await fetch(`/api/tts?${qs}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      if (blob.size < 100) throw new Error("音频为空");
+      audioEl.src = URL.createObjectURL(blob);
+      audioEl.onended = onNarrationEnd;
+      audioEl.onerror = () => { speakLocal(text); };
+      await audioEl.play();
+    } catch {
+      // 服务端不可用 → 本地语音兜底
+      speakLocal(text);
+    }
+  })();
+}
+
+async function speakCurrent() {
+  if (speaking) { stopSpeak(); return; }
+  if (current.audio && !current.audioFailed) {
+    // 有整本录音：从当前页对应的时间点播起，跟着录音自动翻页
+    speaking = true;
+    refreshSpeakBtn();
+    if (bookAudio.readyState >= 1 && pageWindows[pageIndex]) bookAudio.currentTime = pageWindows[pageIndex].start;
+    bookAudio.play().catch(failBookAudio);
+    return;
   }
+  speakPage(current.pages[pageIndex]);
 }
 
 // 预热 voices（Chrome 异步加载）

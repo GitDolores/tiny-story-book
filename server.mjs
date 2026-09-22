@@ -14,6 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || "5177", 10);
 const WEB_DIR = path.join(__dirname, "web");
 const BOOKS_DIR = path.join(__dirname, "kids_book");
+const MP3S_DIR = path.join(__dirname, "mp3s"); // 整本有声书：mp3s/<书名>.mp3
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -23,17 +24,20 @@ const MIME = {
   ".png": "image/png",
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
+  ".mp3": "audio/mpeg",
 };
 
 // 与前端 parseBook 相同的解析逻辑：拆出每页的标题/画面/文字
+// 文字既支持同一行（> 📖文字：……），也支持跨行引用块（> 📖文字： 后跟多行 `>` 对白）
 function parseBook(md, name) {
   const pages = [];
   const lines = md.split(/\r?\n/);
   let title = name;
   let cur = null;
+  let inText = false;
   for (const line of lines) {
     const hm = line.match(/^#\s+(.+)$/);
-    if (hm && !cur && pages.length === 0 && !hm[1].startsWith("#")) {
+    if (hm && !cur && pages.length === 0) {
       // 第一个一级标题 = 绘本标题（跳过可能的渲染说明行）
       title = hm[1].trim();
       continue;
@@ -42,16 +46,29 @@ function parseBook(md, name) {
     if (pm) {
       if (cur) pages.push(cur);
       cur = { no: parseInt(pm[1], 10), title: pm[2].trim() || `第 ${pm[1]} 页`, pic: "", text: "" };
+      inText = false;
       continue;
     }
     if (!cur) continue;
     const pic = line.match(/^>\s*🖼️?\s*画面[：:]\s*(.+)$/);
-    if (pic) { cur.pic = pic[1].trim(); continue; }
-    const txt = line.match(/^>\s*📖?\s*文字[：:]\s*(.+)$/);
-    if (txt) { cur.text = txt[1].trim(); continue; }
+    if (pic) { cur.pic = pic[1].trim(); inText = false; continue; }
+    const txt = line.match(/^>\s*📖?\s*文字[：:]\s*(.*)$/);
+    if (txt) { cur.text = txt[1].trim(); inText = true; continue; }
+    const cont = inText && line.match(/^>\s*(.+)$/);
+    if (cont) { cur.text = cur.text ? `${cur.text}\n${cont[1].trim()}` : cont[1].trim(); continue; }
+    inText = false;
   }
   if (cur) pages.push(cur);
   return { name, title, pages };
+}
+
+// 绘本音频 = mp3s/<书名>.mp3（同名即视为这本书的有声版）
+function bookAudioUrl(name) {
+  const mp3 = path.join(MP3S_DIR, `${name}.mp3`);
+  try {
+    if (fs.statSync(mp3).isFile()) return `/mp3s/${encodeURIComponent(name)}.mp3`;
+  } catch {}
+  return null;
 }
 
 function listBooks() {
@@ -61,12 +78,16 @@ function listBooks() {
     .sort((a, b) => a.localeCompare(b, "zh-CN"))
     .map((f) => {
       const name = f.replace(/\.md$/, "");
+      let book;
       try {
         const md = fs.readFileSync(path.join(BOOKS_DIR, f), "utf8");
-        return parseBook(md, name);
+        book = parseBook(md, name);
       } catch {
-        return { name, title: name, pages: [] };
+        book = { name, title: name, pages: [] };
       }
+      const audio = bookAudioUrl(name);
+      if (audio) book.audio = audio;
+      return book;
     });
 }
 
@@ -196,8 +217,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     let filePath = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
-    const full = path.normalize(path.join(WEB_DIR, filePath));
-    if (!full.startsWith(WEB_DIR)) {
+    // /mp3s/<书名>.mp3 走 mp3s/ 目录，其余走 web/
+    let rootDir = WEB_DIR;
+    if (filePath === "/mp3s" || filePath.startsWith("/mp3s/")) {
+      rootDir = MP3S_DIR;
+      filePath = filePath.slice("/mp3s".length) || "/";
+    }
+    const full = path.normalize(path.join(rootDir, filePath));
+    if (!full.startsWith(rootDir)) {
       res.writeHead(403); res.end("Forbidden"); return;
     }
     if (!fs.existsSync(full) || !fs.statSync(full).isFile()) {
@@ -205,7 +232,35 @@ const server = http.createServer(async (req, res) => {
       res.end("Not Found"); return;
     }
     const ext = path.extname(full).toLowerCase();
-    res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream" });
+    const type = MIME[ext] || "application/octet-stream";
+    const stat = fs.statSync(full);
+    // Range 请求（音频播放/拖动进度条时浏览器会带上）
+    const range = /^bytes=(\d*)-(\d*)$/.exec((req.headers.range || "").trim());
+    if (range) {
+      let start, end;
+      if (range[1] === "") {
+        const suffix = parseInt(range[2] || "0", 10);
+        start = Math.max(0, stat.size - suffix);
+        end = stat.size - 1;
+      } else {
+        start = parseInt(range[1], 10);
+        end = range[2] === "" ? stat.size - 1 : Math.min(parseInt(range[2], 10), stat.size - 1);
+      }
+      if (!Number.isFinite(start) || start > end || start >= stat.size) {
+        res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+        res.end();
+        return;
+      }
+      res.writeHead(206, {
+        "Content-Type": type,
+        "Content-Length": end - start + 1,
+        "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+        "Accept-Ranges": "bytes",
+      });
+      fs.createReadStream(full, { start, end }).pipe(res);
+      return;
+    }
+    res.writeHead(200, { "Content-Type": type, "Content-Length": stat.size, "Accept-Ranges": "bytes" });
     fs.createReadStream(full).pipe(res);
   } catch (err) {
     res.writeHead(500); res.end("Internal Server Error");
