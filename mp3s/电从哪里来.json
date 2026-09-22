@@ -1,0 +1,19 @@
+{
+  "model": "stepaudio-3-tts",
+  "voice": "wenrounvsheng",
+  "speed": 0.9,
+  "pages": 9,
+  "pageSeconds": 5,
+  "durations": [
+    5.928,
+    12.048,
+    19.344,
+    11.592,
+    10.632,
+    12.048,
+    10.536,
+    10.176,
+    23.16
+  ],
+  "generatedAt": "2026-09-22T10:48:54.444Z"
+}

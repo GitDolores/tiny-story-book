@@ -8,7 +8,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { parseBook } from "./lib/kidsbook.mjs";
-import { mp3Duration, stripTags } from "./lib/mp3.mjs";
+import { mp3Duration, mp3Silence, stripTags } from "./lib/mp3.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,6 +22,9 @@ const MAX_INPUT_CHARS = 1000; // API 单次请求输入上限
 const RPM_LIMIT = Math.max(1, parseInt(process.env.STEP_TTS_RPM || "10", 10));
 const MIN_REQUEST_GAP_MS = Math.ceil(60000 / RPM_LIMIT) + 200;
 let lastCallAt = 0;
+
+// 每页音频补齐到的秒数：对白绘本每页一句（≤5s 语音），补静音到固定节拍 = 每 5 秒翻一页
+const PAGE_SECONDS = Math.max(1, parseFloat(process.env.STEP_TTS_PAGE_SECONDS || "5") || 5);
 
 // instruction（全局语气指导）仅这两个模型支持，其余模型传入可能报错
 const INSTRUCTION_MODELS = new Set(["stepaudio-3-tts", "stepaudio-2.5-tts"]);
@@ -115,6 +118,9 @@ const HELP = `tiny-story-book 有声书生成器（StepAudio TTS）
 把 kids_book/ 里的绘本 md 合成为整本有声书：mp3s/<书名>.mp3
 网页端打开该书即显示「🔊 听整本」，按 mp3s/<书名>.json 里记录的每页时长精确自动翻页。
 
+对话体绘本（说话人（情绪）：台词）自动转换：说话人转为 stepaudio 表演指令，
+只朗读台词本身；每页音频补齐到固定节拍（默认 5 秒/页），点开绘本即每 5 秒翻一页。
+
 用法：
   node tts.mjs                    为 kids_book/ 里所有绘本生成（已有录音的跳过）
   node tts.mjs 牙齿保护 电从哪里来   只生成指定绘本
@@ -138,6 +144,7 @@ const HELP = `tiny-story-book 有声书生成器（StepAudio TTS）
   STEP_API_KEY              阶跃星辰 API Key（必填，https://platform.stepfun.com 获取）
   STEP_TTS_MODEL / STEP_TTS_VOICE / STEP_TTS_INSTRUCTION   设默认模型/音色/语气指导
   STEP_TTS_RPM              API 每分钟请求上限（默认 10，免费档；脚本自动按此限速避让 429）
+  STEP_TTS_PAGE_SECONDS     每页固定节拍秒数（默认 5，短页补静音到此时长）
 
 计费：stepaudio-3-tts 约 2.5 元 / 万字符（以阶跃星辰定价页为准）。
 `;
@@ -161,16 +168,39 @@ function loadBooks(opts) {
 
 // ---------- 文本准备 ----------
 
-// 组装每页的朗读文本：页面标题 + 正文（多行对白保留换行，TTS 会自然停顿）
-// stepaudio-3-tts / 2.5 约定半角 () 内为表演指令、不朗读——把「（温柔）」这类
-// 全角情绪标注转成半角，让语气提示生效而不是被念出来；其他模型会念出括号内容，改为剔除
+// 对白行：说话人（情绪）：台词 —— 绘本「对话框形式」
+const DIALOGUE_RE = /^([^（）：\n]{1,4})（([^（）]*)）：\s*(.*)$/;
+// 说话人 → 声音提示（stepaudio-3 把 () 内内容当表演指令，不朗读）
+const SPEAKER_HINTS = {
+  "小女孩": "用稚嫩可爱的小女孩声音",
+  "妈妈": "用温柔亲切的妈妈声音",
+  "旁白": "用讲故事的语气",
+};
+
+// 组装每页的朗读文本：
+// - 对话体绘本（任一行匹配「说话人（情绪）：」）：不念页标题，说话人转为 () 表演指令，
+//   念出来的只有台词本身；旧模型不支持指令时只念台词
+// - 传统绘本：页标题 + 正文（全角情绪标注转半角指令 / 旧模型剔除）
 function prepareText(page, model) {
   const lines = (page.text || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  const utterance = [page.title, ...lines].filter(Boolean).join("\n");
-  if (INSTRUCTION_MODELS.has(model)) {
-    return utterance.replace(/（/g, "(").replace(/）/g, ")");
+  const out = [];
+  for (const line of lines) {
+    const m = line.match(DIALOGUE_RE);
+    if (m) {
+      const [, speaker, emotion, text] = m;
+      if (INSTRUCTION_MODELS.has(model)) {
+        const hint = SPEAKER_HINTS[speaker] || `用${speaker}的声音`;
+        out.push(`(${emotion ? `${hint}，${emotion}` : hint})${text}`);
+      } else {
+        out.push(text);
+      }
+      continue;
+    }
+    out.push(INSTRUCTION_MODELS.has(model) ? line.replace(/（/g, "(").replace(/）/g, ")") : line.replace(/（[^（）]{1,20}）/g, ""));
   }
-  return utterance.replace(/（[^（）]{1,20}）/g, "");
+  const isDialogue = lines.some((l) => DIALOGUE_RE.test(l));
+  if (!isDialogue && page.title) out.unshift(page.title);
+  return out.filter(Boolean).join("\n");
 }
 
 // 防御：超长页按句读切成多段（API 单次输入上限 1000 字符）
@@ -262,9 +292,10 @@ async function stepTts(text, opts, { maxRetries = 3 } = {}) {
 }
 
 // 演示模式：生成帧头合法、载荷为零的占位 mp3——足够验证解析/拼接/配对全链路，
-// 不是真实语音；浏览器若无法解码会自动回退逐页朗读
+// 不是真实语音；时长按「会朗读的字符」（剔除 () 表演指令）估算，贴近真实节奏
 function mockMp3(text) {
-  const seconds = Math.max(1, text.replace(/\s/g, "").length * 0.3);
+  const spoken = text.replace(/\([^()]*\)/g, "");
+  const seconds = Math.max(1, spoken.replace(/\s/g, "").length * 0.3);
   const sampleRate = 44100;
   const samplesPerFrame = 1152; // MPEG1 Layer III
   const bitrate = 64000;
@@ -289,8 +320,8 @@ async function narrateBook(book, opts, fp) {
   const segments = buildSegments(book, opts.model);
   if (segments.length === 0) throw new Error("绘本没有可朗读的页面");
 
-  // 每段缓存到 mp3s/.cache/<书名>/：中途失败重跑时已完成段落直接复用；
-  // 音色/模型/语速/语气指导任一变化都会清空旧缓存
+  // 每段缓存到 mp3s/.cache/<书名>/seg-<文本哈希>.mp3：中途失败重跑时已完成段落直接复用；
+  // 文件名含朗读文本哈希——改稿后重跑不会误用旧段落；音色/模型/语速/语气指导变化则整目录清空
   const cacheDir = path.join(opts.mp3sDir, ".cache", book.name);
   fs.mkdirSync(cacheDir, { recursive: true });
   const metaFile = path.join(cacheDir, "meta.json");
@@ -306,9 +337,11 @@ async function narrateBook(book, opts, fp) {
   }
   fs.writeFileSync(metaFile, JSON.stringify({ fingerprint: fp, model: opts.model, voice: opts.voice, speed: opts.speed }, null, 2), "utf8");
 
-  const buffers = [];
+  const segFiles = segments.map((s) => `seg-${crypto.createHash("sha1").update(s.text).digest("hex").slice(0, 10)}.mp3`);
+  const rawBuffers = [];   // 原始音频（带 ID3，作为补白静音的帧格式模板）
+  const buffers = [];      // 去标签后的待拼接音频
   for (let i = 0; i < segments.length; i++) {
-    const segFile = path.join(cacheDir, `seg-${String(i + 1).padStart(3, "0")}.mp3`);
+    const segFile = path.join(cacheDir, segFiles[i]);
     let buf = null;
     if (!opts.force && fs.existsSync(segFile) && fs.statSync(segFile).size > 200) {
       buf = fs.readFileSync(segFile);
@@ -316,10 +349,38 @@ async function narrateBook(book, opts, fp) {
       buf = opts.mock ? mockMp3(segments[i].text) : await stepTts(segments[i].text, opts);
       fs.writeFileSync(segFile, buf);
     }
+    rawBuffers.push(buf);
     buffers.push(stripTags(buf));
     process.stdout.write(`     合成中 ${i + 1}/${segments.length} 段…\r`);
   }
   process.stdout.write("\r" + " ".repeat(40) + "\r");
+
+  // 清掉改稿前的陈旧段落缓存
+  for (const f of fs.readdirSync(cacheDir)) {
+    if (f.startsWith("seg-") && !segFiles.includes(f)) fs.rmSync(path.join(cacheDir, f), { force: true });
+  }
+
+  // 每页音频补齐到 PAGE_SECONDS（对白绘本 = 每 5 秒一页的固定节拍）：
+  // 短页尾部补格式相同的数字静音；超长页保持实际时长（供人工改稿参考）
+  const durations = book.pages.map(() => 0);
+  buffers.forEach((buf, i) => { durations[segments[i].pageIndex] += mp3Duration(buf); });
+  for (let p = 0; p < book.pages.length; p++) {
+    if (!(durations[p] > 0)) continue;
+    const pad = PAGE_SECONDS - durations[p];
+    if (pad > 0.05) {
+      const first = segments.findIndex((s) => s.pageIndex === p);
+      let last = -1;
+      for (let i = 0; i < segments.length; i++) if (segments[i].pageIndex === p) last = i;
+      const silence = mp3Silence(pad, rawBuffers[first]);
+      if (silence.length) {
+        buffers[last] = Buffer.concat([buffers[last], stripTags(silence)]);
+        durations[p] += mp3Duration(silence);
+      }
+    }
+    if (durations[p] > PAGE_SECONDS + 0.25) {
+      console.warn(`     ⚠ 第 ${p + 1} 页 ${durations[p].toFixed(1)}s 超过 ${PAGE_SECONDS}s，建议精简这一页台词`);
+    }
+  }
 
   // 整本 mp3：先写临时文件再改名，避免半成品被网页端当成完整录音
   const out = path.join(opts.mp3sDir, `${book.name}.mp3`);
@@ -334,8 +395,6 @@ async function narrateBook(book, opts, fp) {
   }
 
   // 每页精确时长清单：前端据此对齐自动翻页的时间点
-  const durations = book.pages.map(() => 0);
-  buffers.forEach((buf, i) => { durations[segments[i].pageIndex] += mp3Duration(buf); });
   fs.writeFileSync(
     path.join(opts.mp3sDir, `${book.name}.json`),
     JSON.stringify({
@@ -343,6 +402,7 @@ async function narrateBook(book, opts, fp) {
       voice: opts.voice,
       speed: opts.speed,
       pages: book.pages.length,
+      pageSeconds: PAGE_SECONDS,
       durations: durations.map((d) => Math.round(d * 1000) / 1000),
       generatedAt: new Date().toISOString(),
     }, null, 2),

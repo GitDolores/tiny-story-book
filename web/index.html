@@ -48,6 +48,7 @@
   .book-card .emoji { font-size: 40px; margin-bottom: 12px; }
   .book-card .title { font-size: 19px; font-weight: bold; margin-bottom: 8px; color: var(--ink); }
   .book-card .pages { font-size: 13px; color: var(--ink-soft); }
+  .book-card .sprite { font-size: 12px; color: var(--ink-soft); margin-top: 6px; min-height: 17px; }
   .book-card .ribbon {
     position: absolute; top: 16px; right: -34px;
     background: var(--accent); color: #fff;
@@ -108,14 +109,50 @@
   }
   .page .page-no { font-size: 13px; color: var(--ink-soft); text-align: center; }
   .page h2 { font-size: 24px; text-align: center; }
-  .pic-box {
+  .scene {
+    position: relative;
     background: linear-gradient(160deg, #fff3e0, #ffe8cc);
     border-radius: 16px;
-    padding: 20px 22px;
-    font-size: 15px; line-height: 1.8; color: #7a675a;
+    padding: 18px 22px 20px;
     border-left: 4px solid var(--accent);
+    overflow: hidden;
   }
-  .pic-box .label { font-size: 13px; opacity: 0.75; display: block; margin-bottom: 4px; }
+  .scene .scene-label { font-size: 12px; opacity: 0.7; color: #7a675a; display: block; margin-bottom: 6px; }
+  .scene .scene-emojis { font-size: 26px; letter-spacing: 8px; margin-bottom: 8px; }
+  .scene .scene-text { font-size: 14px; line-height: 1.8; color: #7a675a; padding-right: 56px; }
+  .scene .watermark {
+    position: absolute; right: 8px; bottom: -6px;
+    font-size: 56px; opacity: 0.16; line-height: 1;
+  }
+  .dialogue { display: flex; flex-direction: column; gap: 14px; padding: 4px 2px; }
+  .bubble-row { display: flex; gap: 10px; align-items: flex-start; }
+  .bubble-row.right { flex-direction: row-reverse; }
+  .bubble-row.center { justify-content: center; }
+  .avatar {
+    width: 44px; height: 44px; border-radius: 50%;
+    background: #fff; box-shadow: var(--shadow);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px; flex: none;
+  }
+  .bubble {
+    max-width: 74%;
+    padding: 10px 16px 12px;
+    border-radius: 16px;
+    font-size: 19px; line-height: 1.7;
+    box-shadow: 0 2px 10px rgba(91, 74, 63, 0.08);
+    position: relative;
+  }
+  .bubble-row.left .bubble { background: #ffe9f0; border-top-left-radius: 4px; }
+  .bubble-row.right .bubble { background: #e3f4ec; border-top-right-radius: 4px; }
+  .bubble .speaker-name { font-size: 12px; color: #b09a89; margin-bottom: 3px; }
+  .bubble .emotion { font-size: 11px; color: #c4a998; position: absolute; top: 8px; right: 12px; }
+  .narration {
+    background: #f6efe4; color: #7a675a;
+    border-radius: 12px; padding: 10px 20px;
+    font-size: 17px; line-height: 1.8; text-align: center;
+    max-width: 96%;
+  }
+  .narration::before { content: "🌙 "; opacity: 0.7; }
   .story {
     font-size: 21px; line-height: 2; text-align: center;
     padding: 10px 6px; letter-spacing: 0.5px;
@@ -145,6 +182,8 @@
   @media (max-width: 640px) {
     .page { padding: 24px 22px; }
     .story { font-size: 18px; }
+    .bubble { font-size: 17px; }
+    .scene .scene-text { padding-right: 0; }
     .dots { display: none; }
   }
 </style>
@@ -171,8 +210,13 @@
     <div class="page" id="page">
       <div class="page-no" id="pageNo"></div>
       <h2 id="pageTitle"></h2>
-      <div class="pic-box"><span class="label">🖼️ 这一页的画面</span><span id="pagePic"></span></div>
-      <div class="story" id="pageText"></div>
+      <div class="scene">
+        <span class="scene-label">🖼️ 这一页的画面</span>
+        <div class="scene-emojis" id="sceneEmojis"></div>
+        <div class="scene-text" id="pagePic"></div>
+        <div class="watermark" id="sceneWatermark"></div>
+      </div>
+      <div class="dialogue" id="pageText"></div>
     </div>
   </div>
   <div class="reader-bottom">
@@ -189,11 +233,12 @@ let current = null;   // 当前书 { name, title, pages: [{title, pic, text}] }
 let pageIndex = 0;
 
 // ---------- 解析绘本 markdown ----------
-// 与 server.mjs parseBook 保持一致：文字既支持同一行，也支持 📖文字： 后的多行 `>` 对白
+// 与 lib/kidsbook.mjs parseBook 保持一致：文字既支持同一行，也支持 📖文字： 后的多行 `>` 对白
 function parseBook(md, name) {
   const pages = [];
   const lines = md.split(/\r?\n/);
   let title = name;
+  let sprite = "";
   let cur = null;
   let inText = false;
   for (const line of lines) {
@@ -209,7 +254,11 @@ function parseBook(md, name) {
       inText = false;
       continue;
     }
-    if (!cur) continue;
+    if (!cur) {
+      const sm = line.match(/^>\s*适读年龄[^·]*·\s*拟人角色[：:]\s*(.+)$/);
+      if (sm) sprite = sm[1].trim();
+      continue;
+    }
     const pic = line.match(/^>\s*🖼️?\s*画面[：:]\s*(.+)$/);
     if (pic) { cur.pic = pic[1].trim(); inText = false; continue; }
     const txt = line.match(/^>\s*📖?\s*文字[：:]\s*(.*)$/);
@@ -219,12 +268,10 @@ function parseBook(md, name) {
     inText = false;
   }
   if (cur) pages.push(cur);
-  return { name, title, pages };
+  return { name, title, sprite, pages };
 }
 
 // ---------- 书架渲染 ----------
-const EMOJIS = ["🦷", "🍚", "🌱", "⚡", "🌙", "🌧️", "🐝", "🚀", "🦴", "🌊", "🔥", "❄️", "🌈", "🍎", "👂", "💡"];
-
 async function loadBooks() {
   // 优先服务端 API；静态托管（GitHub Pages）下没有 /api/books，回退到构建产出的 books.json
   let list = null;
@@ -233,7 +280,7 @@ async function loadBooks() {
       const res = await fetch(url);
       // 静态站的 404 兜底页可能是 text/html 200，content-type 用来排除它
       if (!res.ok || !/json/i.test(res.headers.get("content-type") || "")) continue;
-      list = await res.json(); // [{name, title, pages, audio?}]
+      list = await res.json(); // [{name, title, icon, sprite, pages, audio?}]
       break;
     } catch {}
   }
@@ -251,9 +298,10 @@ function renderShelf() {
     card.className = "book-card";
     card.innerHTML = `
       <div class="ribbon">${b.pages.length} 页</div>
-      <div class="emoji">${EMOJIS[i % EMOJIS.length]}</div>
+      <div class="emoji">${b.icon || "📖"}</div>
       <div class="title"></div>
-      <div class="pages">${b.audio ? "🎧 有声 · 点开听一听" : "点开读一读 📖"}</div>`;
+      <div class="pages">${b.audio ? "🎧 有声 · 点开自动讲" : "点开读一读 📖"}</div>
+      <div class="sprite">${b.sprite ? `🧚 拟人角色 · ${b.sprite}` : ""}</div>`;
     // 卡片用主题名（唯一），阅读器顶部再展示绘本标题
     card.querySelector(".title").textContent = b.name;
     card.addEventListener("click", () => openBook(b));
@@ -262,6 +310,104 @@ function renderShelf() {
 }
 
 // ---------- 阅读器 ----------
+// 对白行：说话人（情绪）：台词
+const DIALOGUE_RE = /^([^（）：\n]{1,4})（([^（）]*)）：\s*(.*)$/;
+const SPEAKERS = {
+  "小女孩": { avatar: "👧", side: "left" },
+  "妈妈": { avatar: "👩", side: "right" },
+};
+
+// 画面描述 → 场景 emoji（装饰性，帮助小朋友一眼看懂这一页的场景）
+const PIC_EMOJIS = [
+  [/雨|水滴|水花|池塘/, "💧"], [/云/, "☁️"], [/太阳|阳光/, "☀️"], [/月亮|夜|星星|星空/, "🌙"],
+  [/风/, "🍃"], [/彩虹/, "🌈"], [/花/, "🌸"], [/树|叶子/, "🌳"], [/种子|绿芽|发芽/, "🌱"],
+  [/牙|刷/, "🦷"], [/糖/, "🍬"], [/饭|餐桌|吃/, "🍚"], [/精灵|婆婆/, "🧚"], [/睡|被窝|梦/, "😴"],
+  [/灯/, "💡"], [/镜子/, "🪞"], [/窗/, "🪟"], [/被子|枕头/, "🛏️"],
+];
+
+function sceneEmojis(pic) {
+  const found = [];
+  for (const [re, emoji] of PIC_EMOJIS) {
+    if (found.length >= 4) break;
+    if (re.test(pic) && !found.includes(emoji)) found.push(emoji);
+  }
+  return found.join("");
+}
+
+function renderScene(p) {
+  const pic = p.pic || "（这一页还没有画面描述呢）";
+  document.getElementById("sceneEmojis").textContent = sceneEmojis(pic);
+  document.getElementById("pagePic").textContent = pic;
+  document.getElementById("sceneWatermark").textContent = current?.icon || "📖";
+}
+
+function renderDialogue(p) {
+  const box = document.getElementById("pageText");
+  box.innerHTML = "";
+  const lines = (p.text || "").split(/\n/).map((s) => s.trim()).filter(Boolean);
+  let hasBubble = false;
+  for (const line of lines) {
+    const m = line.match(DIALOGUE_RE);
+    if (m) {
+      const [, speaker, emotion, content] = m;
+      const meta = SPEAKERS[speaker];
+      if (!meta) {
+        // 旁白等无头像说话人：渲染成居中旁白条
+        const narr = document.createElement("div");
+        narr.className = "narration";
+        narr.textContent = content;
+        box.appendChild(narr);
+        hasBubble = true;
+        continue;
+      }
+      hasBubble = true;
+      const row = document.createElement("div");
+      row.className = `bubble-row ${meta.side}`;
+      const av = document.createElement("div");
+      av.className = "avatar";
+      av.textContent = meta.avatar;
+      row.appendChild(av);
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      const name = document.createElement("div");
+      name.className = "speaker-name";
+      name.textContent = speaker;
+      bubble.appendChild(name);
+      bubble.appendChild(document.createTextNode(content));
+      if (emotion) {
+        const em = document.createElement("span");
+        em.className = "emotion";
+        em.textContent = emotion;
+        bubble.appendChild(em);
+      }
+      row.appendChild(bubble);
+      box.appendChild(row);
+    } else {
+      const narr = document.createElement("div");
+      narr.className = "narration";
+      narr.textContent = line;
+      box.appendChild(narr);
+    }
+  }
+  if (!hasBubble) box.classList.add("story"); else box.classList.remove("story");
+}
+
+let autoTimer = null; // 无音频驱动时的每 5 秒自动翻页
+
+function stopAuto() {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+}
+
+function startAuto() {
+  stopAuto();
+  autoTimer = setInterval(() => {
+    if (!current) return stopAuto();
+    if (speaking) return; // 音频/朗读正在驱动翻页，计时器让位
+    if (pageIndex < current.pages.length - 1) { pageIndex++; renderPage(); }
+    else stopAuto();
+  }, 5000);
+}
+
 function openBook(book) {
   current = book;
   pageIndex = 0;
@@ -272,9 +418,13 @@ function openBook(book) {
   syncVoiceSelect();
   renderDots();
   renderPage();
+  // 点开即自动讲述：整本录音/逐页朗读失败时，退化为每 5 秒自动翻页
+  startAuto();
+  speakCurrent();
 }
 
 function closeBook() {
+  stopAuto();
   stopSpeak();
   current = null;
   document.getElementById("reader").classList.add("hidden");
@@ -285,8 +435,8 @@ function renderPage(opts = {}) {
   const p = current.pages[pageIndex];
   document.getElementById("pageNo").textContent = `第 ${p.no} 页 · 共 ${current.pages.length} 页`;
   document.getElementById("pageTitle").textContent = p.title;
-  document.getElementById("pagePic").textContent = p.pic || "（这一页还没有画面描述呢）";
-  document.getElementById("pageText").textContent = p.text || "（这一页还没有故事文字呢）";
+  renderScene(p);
+  renderDialogue(p);
   document.getElementById("btnPrev").disabled = pageIndex === 0;
   document.getElementById("btnNext").disabled = pageIndex === current.pages.length - 1;
   document.querySelectorAll(".dot").forEach((d, i) => d.classList.toggle("on", i === pageIndex));
@@ -312,13 +462,25 @@ function renderDots() {
     const d = document.createElement("div");
     d.className = "dot";
     d.title = `第 ${i + 1} 页`;
-    d.addEventListener("click", () => { pageIndex = i; renderPage({ keepAudio: isBookAudioPlaying(), seek: true }); });
+    d.addEventListener("click", () => { pageIndex = i; renderPage({ keepAudio: isBookAudioPlaying(), seek: true }); if (autoTimer) startAuto(); });
     dots.appendChild(d);
   });
 }
 
-function goNext() { if (pageIndex < current.pages.length - 1) { pageIndex++; renderPage({ keepAudio: isBookAudioPlaying(), seek: true }); } }
-function goPrev() { if (pageIndex > 0) { pageIndex--; renderPage({ keepAudio: isBookAudioPlaying(), seek: true }); } }
+function goNext() {
+  if (pageIndex < current.pages.length - 1) {
+    pageIndex++;
+    renderPage({ keepAudio: isBookAudioPlaying(), seek: true });
+    if (autoTimer) startAuto(); // 手动翻页后从当前页重新计 5 秒
+  }
+}
+function goPrev() {
+  if (pageIndex > 0) {
+    pageIndex--;
+    renderPage({ keepAudio: isBookAudioPlaying(), seek: true });
+    if (autoTimer) startAuto();
+  }
+}
 
 // ---------- 温柔朗读：整本 mp3（mp3s/<书名>.mp3）→ 豆包 TTS → 浏览器本地语音 ----------
 let speaking = false;
@@ -426,7 +588,11 @@ async function loadTtsConfig() {
 }
 
 function pageNarration(p) {
-  return `第${p.no}页，${p.title}。${p.text || ""}`;
+  // 对话体：只念台词（说话人/情绪由语气自然带出）；非对话体保持「页码+标题+正文」
+  const lines = (p.text || "").split(/\n/).map((s) => s.trim()).filter(Boolean);
+  const parts = lines.map((l) => (l.match(DIALOGUE_RE) || [])[3] || l).filter(Boolean);
+  if (parts.length) return parts.map((s) => (/[。！？…～]$/.test(s) ? s : `${s}。`)).join("");
+  return `第${p.no}页，${p.title}。`;
 }
 
 function stopSpeak() {
@@ -435,6 +601,7 @@ function stopSpeak() {
   audioEl.removeAttribute("src");
   bookAudio.pause();
   if ("speechSynthesis" in window) speechSynthesis.cancel();
+  stopAuto(); // 停止讲述 = 停下来慢慢看，自动翻页一并停下
   refreshSpeakBtn();
 }
 
@@ -509,7 +676,16 @@ async function speakCurrent() {
     speaking = true;
     refreshSpeakBtn();
     if (bookAudio.readyState >= 1 && pageWindows[pageIndex]) bookAudio.currentTime = pageWindows[pageIndex].start;
-    bookAudio.play().catch(failBookAudio);
+    bookAudio.play().catch((err) => {
+      if (err && err.name === "NotAllowedError") {
+        // 浏览器自动播放策略拦下（如后台标签页打开）：录音本身没坏，
+        // 保持静默的每 5 秒自动翻页，按钮回到「听整本」供手动起播
+        speaking = false;
+        refreshSpeakBtn();
+        return;
+      }
+      failBookAudio();
+    });
     return;
   }
   speakPage(current.pages[pageIndex]);
