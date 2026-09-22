@@ -226,13 +226,18 @@ function parseBook(md, name) {
 const EMOJIS = ["🦷", "🍚", "🌱", "⚡", "🌙", "🌧️", "🐝", "🚀", "🦴", "🌊", "🔥", "❄️", "🌈", "🍎", "👂", "💡"];
 
 async function loadBooks() {
-  try {
-    const res = await fetch("/api/books");
-    const list = await res.json(); // [{name, title, pages}]
-    books = list;
-  } catch (e) {
-    books = [];
+  // 优先服务端 API；静态托管（GitHub Pages）下没有 /api/books，回退到构建产出的 books.json
+  let list = null;
+  for (const url of ["/api/books", "books.json"]) {
+    try {
+      const res = await fetch(url);
+      // 静态站的 404 兜底页可能是 text/html 200，content-type 用来排除它
+      if (!res.ok || !/json/i.test(res.headers.get("content-type") || "")) continue;
+      list = await res.json(); // [{name, title, pages, audio?}]
+      break;
+    } catch {}
   }
+  books = Array.isArray(list) ? list : [];
   renderShelf();
 }
 

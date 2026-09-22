@@ -22,6 +22,9 @@
 tiny-story-book/
 ├─ main.mjs          # CLI 入口（零依赖，Node 18+ 直接运行）
 ├─ server.mjs        # 小书架网页服务器（零依赖）
+├─ build-pages.mjs   # 静态站构建（GitHub Pages 部署用）
+├─ lib/
+│  └─ kidsbook.mjs   # 绘本解析与目录扫描（服务端 / 构建脚本共用）
 ├─ agents.md         # 绘本风格指南 = AI 系统提示词（可自由定制）
 ├─ verify-web.mjs    # 网页 e2e 验证脚本（需 CDP Chrome）
 ├─ README.md
@@ -32,8 +35,9 @@ tiny-story-book/
 │  ├─ 牙齿保护.md
 │  ├─ 食物消化.md
 │  └─ .progress.json # 生成进度（断点续跑用）
-└─ mp3s/             # 整本有声书（可选）：mp3s/<主题>.mp3，与同名绘本自动配对
-   └─ 电从哪里来.mp3
+├─ mp3s/             # 整本有声书（可选）：mp3s/<主题>.mp3，与同名绘本自动配对
+│  └─ 电从哪里来.mp3
+└─ dist/             # 静态站产物（build-pages.mjs 生成，已被 gitignore）
 ```
 
 ## 🚀 快速开始
@@ -108,6 +112,38 @@ node server.mjs
 start chrome --remote-debugging-port=9222 --user-data-dir=%TEMP%\tsb-cdp http://localhost:5177
 node verify-web.mjs
 ```
+
+## 🌐 部署到 GitHub Pages（静态站）
+
+小书架也能作为纯静态站点托管，不需要 Node 服务端：
+
+```bat
+node build-pages.mjs
+```
+
+产物在 `dist/`：`index.html` + `books.json`（绘本数据）+ `mp3s/`（整本录音）+ `.nojekyll`。推到 `gh-pages` 分支（GitHub Pages 源选该分支根目录）即可：
+
+```bat
+git -C dist init -q
+git -C dist remote add origin https://github.com/GitDolores/tiny-story-book.git
+git -C dist add -A
+git -C dist commit -q -m "deploy: static site"
+git -C dist push -f origin gh-pages
+```
+
+在线地址：https://githdolores.github.io/tiny-story-book/
+
+静态站与原版服务的差异：
+
+| 能力 | 本地 `node server.mjs` | GitHub Pages 静态站 |
+|---|---|---|
+| 翻页阅读 / 整本 mp3 讲述 | ✅ | ✅（音频随构建一起部署） |
+| 新绘本自动出现 | ✅ 动态扫描 `kids_book/` | ❌ 需重新构建并推送 |
+| 豆包 TTS 逐页朗读 | ✅ 配置凭证后 | ❌ 无服务端，降级为浏览器本地语音 |
+
+页面优先请求 `/api/books`，失败时回退到 `books.json`，所以同一份 `web/index.html` 在两种部署下都能跑。
+
+> 中文 Windows 上 `git push` 直连 GitHub 常超时，可给命令加 `-c http.proxy=http://127.0.0.1:8090`（换成你自己的代理），或先 `set http_proxy=...`。
 
 ## 📖 使用方法
 

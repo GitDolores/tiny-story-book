@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import net from "node:net";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
+import { listBooks as listBooksFrom } from "./lib/kidsbook.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || "5177", 10);
@@ -27,68 +28,8 @@ const MIME = {
   ".mp3": "audio/mpeg",
 };
 
-// 与前端 parseBook 相同的解析逻辑：拆出每页的标题/画面/文字
-// 文字既支持同一行（> 📖文字：……），也支持跨行引用块（> 📖文字： 后跟多行 `>` 对白）
-function parseBook(md, name) {
-  const pages = [];
-  const lines = md.split(/\r?\n/);
-  let title = name;
-  let cur = null;
-  let inText = false;
-  for (const line of lines) {
-    const hm = line.match(/^#\s+(.+)$/);
-    if (hm && !cur && pages.length === 0) {
-      // 第一个一级标题 = 绘本标题（跳过可能的渲染说明行）
-      title = hm[1].trim();
-      continue;
-    }
-    const pm = line.match(/^##\s*第\s*(\d+)\s*页[：:]?\s*(.*)$/);
-    if (pm) {
-      if (cur) pages.push(cur);
-      cur = { no: parseInt(pm[1], 10), title: pm[2].trim() || `第 ${pm[1]} 页`, pic: "", text: "" };
-      inText = false;
-      continue;
-    }
-    if (!cur) continue;
-    const pic = line.match(/^>\s*🖼️?\s*画面[：:]\s*(.+)$/);
-    if (pic) { cur.pic = pic[1].trim(); inText = false; continue; }
-    const txt = line.match(/^>\s*📖?\s*文字[：:]\s*(.*)$/);
-    if (txt) { cur.text = txt[1].trim(); inText = true; continue; }
-    const cont = inText && line.match(/^>\s*(.+)$/);
-    if (cont) { cur.text = cur.text ? `${cur.text}\n${cont[1].trim()}` : cont[1].trim(); continue; }
-    inText = false;
-  }
-  if (cur) pages.push(cur);
-  return { name, title, pages };
-}
-
-// 绘本音频 = mp3s/<书名>.mp3（同名即视为这本书的有声版）
-function bookAudioUrl(name) {
-  const mp3 = path.join(MP3S_DIR, `${name}.mp3`);
-  try {
-    if (fs.statSync(mp3).isFile()) return `/mp3s/${encodeURIComponent(name)}.mp3`;
-  } catch {}
-  return null;
-}
-
 function listBooks() {
-  if (!fs.existsSync(BOOKS_DIR)) return [];
-  return fs.readdirSync(BOOKS_DIR)
-    .filter((f) => f.endsWith(".md"))
-    .sort((a, b) => a.localeCompare(b, "zh-CN"))
-    .map((f) => {
-      const name = f.replace(/\.md$/, "");
-      let book;
-      try {
-        const md = fs.readFileSync(path.join(BOOKS_DIR, f), "utf8");
-        book = parseBook(md, name);
-      } catch {
-        book = { name, title: name, pages: [] };
-      }
-      const audio = bookAudioUrl(name);
-      if (audio) book.audio = audio;
-      return book;
-    });
+  return listBooksFrom({ booksDir: BOOKS_DIR, mp3sDir: MP3S_DIR });
 }
 
 // ---------- 豆包 TTS（火山引擎大模型语音合成，HTTP API） ----------
