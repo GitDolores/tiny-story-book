@@ -339,11 +339,22 @@ function prepareBookAudio(book) {
   }
 }
 
-// 把整段录音按各页字数占比切成时间区间，用于「边听边翻页」
+// 把整段录音按每页时长切成时间区间，用于「边听边翻页」
 function ensurePageWindows() {
   if (pageWindows.length || !current) return;
   const duration = bookAudio.duration;
   if (!duration || !isFinite(duration) || duration <= 0) return;
+  if (current.audioPages && current.audioPages.length === current.pages.length) {
+    // tts.mjs 生成的每页精确时长（mp3s/<书名>.json）
+    let acc = 0;
+    pageWindows = current.audioPages.map((s) => {
+      const start = acc;
+      acc += s;
+      return { start, end: Math.min(acc, duration) };
+    });
+    return;
+  }
+  // 无时长清单（外部放入的录音）：按各页字数占比估算
   const weights = current.pages.map((p) => Math.max(1, `${p.title || ""}${p.text || ""}`.replace(/\s/g, "").length));
   const total = weights.reduce((a, b) => a + b, 0);
   let acc = 0;

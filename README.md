@@ -13,6 +13,7 @@
 - **拟人化叙事**：像「牙婆婆」「肚子里的小人」一样，给主题安排一个可爱的小精灵角色
 - **结构化故事**：开篇引入小角色 → 中间发生小冲突 → 结尾科普知识点 + 好习惯引导
 - **自动保存**：生成结果写入 `./kids_book/<主题>.md`
+- **一键有声书**：`node tts.mjs` 用 StepAudio-3 TTS 把绘本 md 合成整本 mp3，小书架「听整本」逐页精确自动翻页
 - **小书架网页**：`node server.mjs` 打开卡片书架，点击卡片翻页阅读，浏览器语音温柔朗读，边讲边自动翻页
 - **批量 + 持续运行**：批量生成不断档，失败自动重试、断点续跑、`--watch` 常驻模式（见下文）
 
@@ -21,10 +22,12 @@
 ```plaintext
 tiny-story-book/
 ├─ main.mjs          # CLI 入口（零依赖，Node 18+ 直接运行）
+├─ tts.mjs           # 有声书生成 CLI（StepAudio TTS，零依赖）
 ├─ server.mjs        # 小书架网页服务器（零依赖）
 ├─ build-pages.mjs   # 静态站构建（GitHub Pages 部署用）
 ├─ lib/
-│  └─ kidsbook.mjs   # 绘本解析与目录扫描（服务端 / 构建脚本共用）
+│  ├─ kidsbook.mjs   # 绘本解析与目录扫描（服务端 / 构建脚本共用）
+│  └─ mp3.mjs        # MP3 时长解析（帧头遍历，零依赖）
 ├─ agents.md         # 绘本风格指南 = AI 系统提示词（可自由定制）
 ├─ verify-web.mjs    # 网页 e2e 验证脚本（需 CDP Chrome）
 ├─ README.md
@@ -36,7 +39,7 @@ tiny-story-book/
 │  ├─ 食物消化.md
 │  └─ .progress.json # 生成进度（断点续跑用）
 ├─ mp3s/             # 整本有声书（可选）：mp3s/<主题>.mp3，与同名绘本自动配对
-│  └─ 电从哪里来.mp3
+│  └─ 电从哪里来.mp3   # tts.mjs 生成时另写 <主题>.json（每页精确时长清单）
 └─ dist/             # 静态站产物（build-pages.mjs 生成，已被 gitignore）
 ```
 
@@ -85,10 +88,35 @@ mp3s/
 └─ 电从哪里来.mp3     ← 对应 kids_book/电从哪里来.md
 ```
 
-- 打开这本书时按钮变成「🔊 听整本」，播放这段录音，并按每页文字长度估算的时间点自动翻页
+- 打开这本书时按钮变成「🔊 听整本」，播放这段录音并自动翻页——有 `<主题>.json` 每页时长清单（`tts.mjs` 自动生成）时逐页精确对齐，否则按每页文字长度估算
 - 手动翻页（箭头/圆点）会把录音跳到该页对应的时间点；录制顺序与绘本页序一致时对得最准
 - 没放 mp3 的绘本完全不受影响，继续走豆包 TTS / 浏览器本地语音的逐页朗读
 - 音频文件缺失或解码失败时自动退回逐页朗读
+
+### 用 StepAudio-3 TTS 一键生成有声书（推荐）
+
+手动录音太麻烦？`tts.mjs` 直接把 `kids_book/` 里的绘本 md 合成为整本 mp3（默认阶跃星辰 **stepaudio-3-tts**，真人级讲述表现，支持情绪语气）：
+
+```bat
+:: 1. 配置阶跃星辰 API Key（https://platform.stepfun.com 获取；永久生效用 setx）
+set STEP_API_KEY=sk-xxx
+
+:: 2. 一键生成（已有录音的绘本自动跳过）
+node tts.mjs
+
+:: 或只生成指定绘本 / 换音色 / 强制重新生成
+node tts.mjs 牙齿保护 电从哪里来
+node tts.mjs --voice tianmeinvsheng --force 牙齿保护
+```
+
+- **自动配对**：生成 `mp3s/<主题>.mp3`，小书架里该书立即变成「🎧 有声」，点「🔊 听整本」边播边自动翻页
+- **精确翻页**：同时写入 `mp3s/<主题>.json` 记录每页精确时长，翻页时间点逐页对齐（静态站也生效——时长清单会随 `books.json` 一起部署）
+- **断点续合成**：每页音频缓存在 `mp3s/.cache/`（已 gitignore），中途失败重跑自动续上；换音色/模型/语速后重跑会自动重录全部段落
+- **语气指导**：默认附带「温柔讲绘本」的全局 instruction（`--instruction` 可自定义，仅 stepaudio-3 / stepaudio-2.5 支持）
+- **对白情绪标注**：绘本里「小女孩（好奇、雀跃）：……」的全角括号提示会转成 TTS 表演指令——念出来的是带情绪的台词，不会把括号字读出来
+- **计费**：stepaudio-3-tts 约 2.5 元/万字符，一本绘本约 0.1-0.2 元；加 `--mock` 不花钱跑通全流程（生成占位静音音频）
+
+常用音色：`wenrounvsheng` 温柔女声（默认）、`tianmeinvsheng` 甜美女声、`ruanmengnvsheng` 软萌女声、`linjiajiejie` 邻家姐姐、`cixingnansheng` 磁性男声……完整列表 `node tts.mjs --list`，也支持传入克隆音色 ID。
 
 ### 配置豆包 TTS（推荐，音质远超浏览器本地语音）
 
@@ -137,7 +165,7 @@ git -C dist push -f origin gh-pages
 
 | 能力 | 本地 `node server.mjs` | GitHub Pages 静态站 |
 |---|---|---|
-| 翻页阅读 / 整本 mp3 讲述 | ✅ | ✅（音频随构建一起部署） |
+| 翻页阅读 / 整本 mp3 讲述 | ✅ | ✅（音频与每页精确时长随构建一起部署） |
 | 新绘本自动出现 | ✅ 动态扫描 `kids_book/` | ❌ 需重新构建并推送 |
 | 豆包 TTS 逐页朗读 | ✅ 配置凭证后 | ❌ 无服务端，降级为浏览器本地语音 |
 
@@ -157,6 +185,10 @@ git -C dist push -f origin gh-pages
 | `node main.mjs --batch topics.txt --add 新主题` | 向清单安全追加主题（UTF-8 编码，推荐用这个而不是手动编辑） |
 | `node main.mjs --pages 14 牙齿保护` | 指定页数（默认 12-16 页） |
 | `node main.mjs --provider mock 牙齿保护` | 演示模式（无需 API Key） |
+| `node tts.mjs` | 把 `kids_book/` 全部绘本生成为整本有声书（StepAudio-3 TTS） |
+| `node tts.mjs 牙齿保护 电从哪里来` | 只生成指定绘本的有声书 |
+| `node tts.mjs --list` | 查看录音状态与推荐音色 |
+| `node tts.mjs --mock 牙齿保护` | 有声书演示模式（无需 API Key，占位音频） |
 
 `topics.txt` 示例：
 
@@ -205,6 +237,8 @@ node main.mjs --batch topics.txt --add 睡眠的秘密
 | `LLM_MODEL` | 模型名 | 按提供商推断 |
 | `LLM_PROVIDER` | `dashscope` / `openai` / `mock` | 自动探测 |
 | `TTS_APP_ID` / `TTS_ACCESS_KEY` / `TTS_SECRET_KEY` | 火山引擎豆包 TTS 凭证（小书架语音讲述） | 未配置则用浏览器本地语音 |
+| `STEP_API_KEY` | 阶跃星辰 API Key（`tts.mjs` 有声书生成） | — |
+| `STEP_TTS_MODEL` / `STEP_TTS_VOICE` / `STEP_TTS_INSTRUCTION` | 有声书默认模型 / 音色 / 语气指导 | `stepaudio-3-tts` / `wenrounvsheng` / 内置温柔讲述 |
 
 **提供商自动探测顺序**：`--provider` 参数 > `LLM_PROVIDER` > `DASHSCOPE_API_KEY`（→ qwen-plus）> `OPENAI_API_KEY`（→ gpt-4o-mini）> `LLM_BASE_URL` + `LLM_API_KEY` > 都没有则降级为 mock 演示模式。
 
